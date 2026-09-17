@@ -38,7 +38,7 @@ public class DbHealthController {
             return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE).body(Map.of(
                     "status", "error",
                     "service", SERVICE,
-                    "error", String.valueOf(exception.getMostSpecificCause().getMessage())));
+                    "error", "Database unavailable"));
         }
     }
 }
