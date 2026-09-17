@@ -3,3 +3,8 @@
 .gradle
 build
 *.md
+
+# Local credentials and generated development keys
+.local/
+.env
+.env.*
