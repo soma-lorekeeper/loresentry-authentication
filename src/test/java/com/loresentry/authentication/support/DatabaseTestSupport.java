@@ -6,6 +6,9 @@ import org.springframework.test.context.DynamicPropertySource;
 public abstract class DatabaseTestSupport {
     @DynamicPropertySource
     static void databaseProperties(DynamicPropertyRegistry registry) {
+        registry.add("auth.google.client-id", () -> "test-client");
+        registry.add("auth.google.client-secret", () -> "test-only-secret");
+        registry.add("auth.google.redirect-uri", () -> "https://api.loresentry.com/auth/callback/google");
         registry.add("spring.data.redis.host", TestInfrastructure::redisHost);
         registry.add("spring.data.redis.port", TestInfrastructure::redisPort);
         registry.add("spring.datasource.url", TestInfrastructure::jdbcUrl);
