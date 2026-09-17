@@ -5,7 +5,7 @@ import java.util.Objects;
 /** Adapters must not claim NOT_EXECUTED merely because a command timed out. */
 public class PortFailure extends RuntimeException {
     public enum Kind { UNAVAILABLE, INVALID_DATA, IDENTITY_ALREADY_REGISTERED, INVALID_IDENTITY, INVALID_TOKEN }
-    public enum Execution { NOT_EXECUTED, UNKNOWN }
+    public enum Execution { NOT_EXECUTED, EXECUTED, UNKNOWN }
 
     private final Kind kind;
     private final Execution execution;
