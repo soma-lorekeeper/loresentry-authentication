@@ -9,5 +9,6 @@ public interface RefreshTokenStore {
     /** Atomic GETDEL; Optional.empty means confirmed absence. Never retry this command. */
     Optional<UUID> consume(UUID jti);
     /** Both confirmed deletion and confirmed absence return normally. */
+    /** Returns a confirmed deletion/absence or fails within 500 ms, including connection acquisition. */
     void delete(UUID jti);
 }

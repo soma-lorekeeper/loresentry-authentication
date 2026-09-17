@@ -18,6 +18,9 @@ import java.util.function.Function;
 public class RedisRefreshTokenStore implements RefreshTokenStore {
     private final StringRedisTemplate redis;
     private final Clock clock;
+    private final java.util.concurrent.ExecutorService deletions = java.util.concurrent.Executors.newVirtualThreadPerTaskExecutor();
+    @jakarta.annotation.PreDestroy
+    public void close() { deletions.shutdownNow(); }
     public RedisRefreshTokenStore(StringRedisTemplate redis, Clock clock) { this.redis = redis; this.clock = clock; }
     public void save(UUID jti, UUID userId, Instant expiresAt) {
         long ttl = Duration.between(clock.instant(), expiresAt).toMillis();
@@ -37,8 +40,20 @@ public class RedisRefreshTokenStore implements RefreshTokenStore {
         }
     }
     public void delete(UUID jti) {
-        Long count = execute(c -> c.keyCommands().del(key(jti)));
-        if (count == null) throw new PortFailure(PortFailure.Kind.UNAVAILABLE, PortFailure.Execution.UNKNOWN, false);
+        var result = deletions.submit(() -> execute(c -> c.keyCommands().del(key(jti))));
+        try {
+            Long count = result.get(500, java.util.concurrent.TimeUnit.MILLISECONDS);
+            if (count == null) throw new PortFailure(PortFailure.Kind.UNAVAILABLE, PortFailure.Execution.UNKNOWN, false);
+        } catch (java.util.concurrent.TimeoutException e) {
+            result.cancel(true);
+            throw new PortFailure(PortFailure.Kind.UNAVAILABLE, PortFailure.Execution.UNKNOWN, true);
+        } catch (InterruptedException e) {
+            result.cancel(true); Thread.currentThread().interrupt();
+            throw new PortFailure(PortFailure.Kind.UNAVAILABLE, PortFailure.Execution.UNKNOWN, false);
+        } catch (java.util.concurrent.ExecutionException e) {
+            if (e.getCause() instanceof PortFailure failure) throw failure;
+            throw new PortFailure(PortFailure.Kind.UNAVAILABLE, PortFailure.Execution.UNKNOWN, false);
+        }
     }
     private <T> T execute(Function<RedisConnection, T> command) {
         AtomicBoolean invoked = new AtomicBoolean();
