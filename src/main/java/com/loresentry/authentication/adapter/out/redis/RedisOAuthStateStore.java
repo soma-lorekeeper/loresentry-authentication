@@ -28,7 +28,8 @@ public class RedisOAuthStateStore implements OAuthStateStore {
         String value;
         try { value = redis.opsForValue().getAndDelete(key(id)); }
         catch (RuntimeException e) { throw unavailable(); }
-        return Optional.ofNullable(value).map(json::decode);
+        try { return Optional.ofNullable(value).map(json::decode); }
+        catch (PortFailure e) { throw new PortFailure(e.kind(), PortFailure.Execution.EXECUTED, false); }
     }
     private String key(String id) { return "auth:oauth:" + id; }
     private PortFailure unavailable() { return new PortFailure(PortFailure.Kind.UNAVAILABLE, PortFailure.Execution.UNKNOWN, true); }

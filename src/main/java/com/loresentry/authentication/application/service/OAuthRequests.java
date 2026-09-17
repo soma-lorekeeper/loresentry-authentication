@@ -30,4 +30,46 @@ public final class OAuthRequests {
             throw new AuthFailure(AuthFailure.Reason.LOGIN_UNAVAILABLE);
         } catch (PortFailure e) { throw new AuthFailure(AuthFailure.Reason.LOGIN_UNAVAILABLE); }
     }
+
+    public OAuthStateStore.State consume(com.loresentry.authentication.application.port.in.LoginUseCase.Callback request) {
+        var notConsumed = AuthFailure.Consumption.NOT_CONSUMED;
+        if (request == null || !OAuthSecrets.valid(request.loginRequestId()) || !OAuthSecrets.valid(request.state())
+            || (blank(request.code()) == blank(request.error())))
+            throw new AuthFailure(AuthFailure.Reason.OAUTH_REQUEST_INVALID, notConsumed);
+        OidcClient.Settings settings;
+        OAuthStateStore.State before;
+        try {
+            settings = provider.settings();
+            before = store.find(request.loginRequestId()).orElseThrow(() -> invalid(notConsumed));
+        } catch (PortFailure failure) { throw storageFailure(failure, notConsumed); }
+        validate(before, request.state(), settings, notConsumed);
+        OAuthStateStore.State consumed;
+        try {
+            consumed = store.consume(request.loginRequestId()).orElseThrow(() -> invalid(notConsumed));
+        } catch (PortFailure failure) {
+            var outcome = switch (failure.execution()) {
+                case NOT_EXECUTED -> notConsumed;
+                case EXECUTED -> AuthFailure.Consumption.CONSUMED;
+                case UNKNOWN -> AuthFailure.Consumption.UNKNOWN;
+            };
+            throw storageFailure(failure, outcome);
+        }
+        validate(consumed, request.state(), settings, AuthFailure.Consumption.CONSUMED);
+        return consumed;
+    }
+    private void validate(OAuthStateStore.State value, String state, OidcClient.Settings settings,
+                          AuthFailure.Consumption outcome) {
+        if (value.schemaVersion() != 1 || !state.equals(value.state())
+            || !settings.registrationId().equals(value.registrationId()) || !settings.clientId().equals(value.clientId())
+            || !settings.redirectUri().equals(value.redirectUri()) || !clock.instant().isBefore(value.expiresAt())
+            || value.createdAt().isAfter(clock.instant())) throw invalid(outcome);
+    }
+    private boolean blank(String value) { return value == null || value.isBlank(); }
+    private AuthFailure invalid(AuthFailure.Consumption outcome) {
+        return new AuthFailure(AuthFailure.Reason.OAUTH_REQUEST_INVALID, outcome);
+    }
+    private AuthFailure storageFailure(PortFailure failure, AuthFailure.Consumption outcome) {
+        return new AuthFailure(failure.kind() == PortFailure.Kind.INVALID_DATA
+            ? AuthFailure.Reason.OAUTH_REQUEST_INVALID : AuthFailure.Reason.LOGIN_UNAVAILABLE, outcome);
+    }
 }
