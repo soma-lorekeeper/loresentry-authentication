@@ -20,7 +20,11 @@ public class AuthFailure extends RuntimeException {
     public AuthFailure(Reason reason) { this(reason, null); }
 
     public AuthFailure(Reason reason, Consumption consumption) {
-        super(Objects.requireNonNull(reason).name());
+        this(reason, consumption, null);
+    }
+
+    public AuthFailure(Reason reason, Consumption consumption, Throwable cause) {
+        super(Objects.requireNonNull(reason).name(), cause);
         this.reason = reason;
         this.consumption = consumption;
     }
