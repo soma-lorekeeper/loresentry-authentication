@@ -1,4 +1,4 @@
-package com.loresentry.authentication.web;
+package com.loresentry.authentication.adapter.in.web;
 
 import java.util.Map;
 
