@@ -24,6 +24,7 @@ dependencies {
 	implementation 'org.springframework.boot:spring-boot-starter-flyway'
 	implementation 'org.flywaydb:flyway-database-postgresql'
 	implementation 'com.fasterxml.uuid:java-uuid-generator:5.2.0'
+	implementation 'org.springframework.security:spring-security-oauth2-jose'
 	runtimeOnly 'org.postgresql:postgresql'
 	testImplementation 'org.springframework.boot:spring-boot-starter-webmvc-test'
 	testImplementation 'org.testcontainers:testcontainers-junit-jupiter'

@@ -1,12 +1,16 @@
 package com.loresentry.authentication.config;
 
 import com.loresentry.authentication.adapter.out.jwt.JwtKeys;
+import com.loresentry.authentication.adapter.out.jwt.RsaJwtTokens;
+import com.loresentry.authentication.application.port.out.JwtTokens;
+import java.time.Clock;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
 @Configuration(proxyBeanMethods = false)
 public class JwtConfiguration {
+    @Bean public JwtTokens jwtTokens(JwtKeys keys, Clock clock) { return new RsaJwtTokens(keys, clock); }
     @Bean
     public JwtKeys jwtKeys(@Value("${auth.jwt.private-key-base64}") String privateKey,
                            @Value("${auth.jwt.public-key-path}") String publicPath,
