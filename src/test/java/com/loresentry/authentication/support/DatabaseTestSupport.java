@@ -6,6 +6,8 @@ import org.springframework.test.context.DynamicPropertySource;
 public abstract class DatabaseTestSupport {
     @DynamicPropertySource
     static void databaseProperties(DynamicPropertyRegistry registry) {
+        registry.add("spring.data.redis.host", TestInfrastructure::redisHost);
+        registry.add("spring.data.redis.port", TestInfrastructure::redisPort);
         registry.add("spring.datasource.url", TestInfrastructure::jdbcUrl);
         registry.add("spring.datasource.username", TestInfrastructure::username);
         registry.add("spring.datasource.password", TestInfrastructure::password);
