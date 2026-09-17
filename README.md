@@ -68,9 +68,23 @@ curl localhost:8000/health
 ./gradlew build
 ```
 
-Covers context startup, that virtual threads are actually enabled, and both
-endpoints through `MockMvc`. `MigrationTest` applies the Flyway migrations to a
-`postgres:18` container through Testcontainers, so Docker must be running.
+Covers context startup, virtual threads, HTTP health endpoints, core contracts,
+ArchUnit dependency rules, and connections to disposable PostgreSQL and Redis
+instances. Java 21 and access to Docker are required. Testcontainers creates
+dedicated containers with random ports; tests never use production connection
+settings. The first run downloads Gradle dependencies and container images.
+
+To verify infrastructure isolation in separate test executions:
+
+```bash
+./gradlew test --tests '*InfrastructureTest' --rerun-tasks
+./gradlew test --tests '*InfrastructureTest' --rerun-tasks
+```
+
+Core contracts are under `application/port`, account models under `domain`,
+and framework configuration under `config`. Business services and production
+adapters are added by their respective implementation issues; no placeholder
+authentication implementation is registered.
 
 ## Deploy
 
