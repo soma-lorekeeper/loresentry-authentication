@@ -34,13 +34,27 @@ Boot 4 moved several test annotations. The one this repo uses is
 
 ## Endpoints
 
-| Method | Path | Behaviour |
-| --- | --- | --- |
-| `GET` | `/health` | `{"status":"ok"}`. Used by the Kubernetes probes. |
-| `GET` | `/` | `{"service":"authentication-api"}` |
+The `/auth` APIs are internal calls from the BFF. The BFF owns browser cookies,
+CSRF, CORS and access-token verification. Account calls trust its `X-User-Id`
+header, so the deployment must keep this service unreachable from the internet.
 
-The gateway exposes this service publicly at `GET /auth`, which calls `/` here
-and returns the payload nested under `upstream`.
+| Method | Path | Result |
+| --- | --- | --- |
+| `POST` | `/auth/oauth/google/prepare` | Google authorization URL and five-minute login request |
+| `POST` | `/auth/oauth/google/callback` | Verified Google identity mapped to a service account and tokens |
+| `POST` | `/auth/tokens/refresh` | Consume one RT and save a new AT/RT pair |
+| `POST` | `/auth/tokens/revoke` | Revoke the supplied RT; return an empty `204` |
+| `GET` | `/auth/users/me` | Account profile identified by `X-User-Id` |
+| `PATCH` | `/auth/users/me` | Change `display_name` only |
+| `GET` | `/health` | Process health |
+| `GET` | `/health/db` | Database connectivity |
+| `GET` | `/` | Service name |
+
+Request and response fields use snake case. Errors contain `code`, `message` and
+`next_action`. Only callback responses include `login_request_consumed`; a null
+value means that consumption could not be confirmed. Token responses use
+`Cache-Control: no-store`. The API contract is maintained in the Loresentry docs
+repository at `auth/INTERNAL_API.md`.
 
 ## Schema
 
@@ -57,10 +71,51 @@ foreign keys.
 
 ## Run locally
 
+Java 21, PostgreSQL and Redis are required. Flyway creates the account tables and
+Hibernate validates them at startup. Supply the following environment variables
+before starting the application; `.env` files are not loaded automatically.
+
+| Configuration | Environment variables |
+| --- | --- |
+| PostgreSQL | `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USERNAME`, `DB_PASSWORD` |
+| Redis | `SPRING_DATA_REDIS_HOST`, `SPRING_DATA_REDIS_PORT`, `SPRING_DATA_REDIS_PASSWORD` when required |
+| JWT private key | `AUTH_JWT_PRIVATE_KEY_BASE64`: unencrypted PKCS#8 DER encoded as one-line Base64 |
+| JWT public key | `AUTH_JWT_PUBLIC_KEY_PATH`: path to a readable SPKI PEM public key |
+| JWT key identity | `AUTH_JWT_KEY_ID`: persistent UUID v4 for this key pair |
+| Google OAuth | `AUTH_GOOGLE_CLIENT_ID`, `AUTH_GOOGLE_CLIENT_SECRET`, `AUTH_GOOGLE_REDIRECT_URI` |
+
+Defaults are PostgreSQL `localhost:5432/authentication`, user
+`authentication_svc`, and Redis `localhost:6379`. Production Google callbacks use
+`https://api.loresentry.com/auth/callback/google`. With the `local` profile, an
+HTTP callback is allowed only on localhost or a loopback address. Register the
+same callback in Google and point it at the browser-facing BFF.
+
+Generate local test keys once with OpenSSL on the Linux host. Keep these files
+between restarts; repeat generation only when intentionally replacing the keys.
+Both `.local/` and local environment files are excluded from Git and Docker build
+contexts.
+
 ```bash
-./gradlew bootRun
-curl localhost:8000/health
+umask 077
+mkdir -p .local
+openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 -out .local/auth-private.pem
+openssl pkey -in .local/auth-private.pem -pubout -out .local/auth-public.pem
+cat /proc/sys/kernel/random/uuid > .local/auth-kid
+export AUTH_JWT_PRIVATE_KEY_BASE64="$(openssl pkcs8 -topk8 -nocrypt -in .local/auth-private.pem -outform DER | base64 -w0)"
+export AUTH_JWT_PUBLIC_KEY_PATH="$PWD/.local/auth-public.pem"
+export AUTH_JWT_KEY_ID="$(cat .local/auth-kid)"
 ```
+
+After supplying the database password and Google configuration:
+
+```bash
+SPRING_PROFILES_ACTIVE=local ./gradlew bootRun
+curl http://localhost:8000/health
+```
+
+Missing or invalid JWT/Google configuration fails startup. Private keys, Google
+secrets and token values must not be committed. Share only the public key and key
+ID with the BFF.
 
 ## Test
 
@@ -68,23 +123,26 @@ curl localhost:8000/health
 ./gradlew build
 ```
 
-Covers context startup, virtual threads, HTTP health endpoints, core contracts,
-ArchUnit dependency rules, and connections to disposable PostgreSQL and Redis
-instances. Java 21 and access to Docker are required. Testcontainers creates
-dedicated containers with random ports; tests never use production connection
-settings. The first run downloads Gradle dependencies and container images.
-
-To verify infrastructure isolation in separate test executions:
+Tests require Java 21 and Docker. Testcontainers creates disposable PostgreSQL
+and Redis instances on random ports, and Google responses come from an in-process
+HTTP/JWK server. Tests generate their own RSA keys and do not require Google
+credentials or production connection settings. The first run downloads Gradle
+dependencies and container images.
 
 ```bash
-./gradlew test --tests '*InfrastructureTest' --rerun-tasks
+./gradlew test --tests '*FullLoginFlowTest' --rerun-tasks
 ./gradlew test --tests '*InfrastructureTest' --rerun-tasks
 ```
 
-Core contracts are under `application/port`, account models under `domain`,
-and framework configuration under `config`. Business services and production
-adapters are added by their respective implementation issues; no placeholder
-authentication implementation is registered.
+The full HTTP test covers preparation, callback, profile editing, repeat login,
+refresh and logout while preserving another device's token. Unit and adapter
+tests cover validation, database races, Redis command outcomes, time limits and
+error responses. ArchUnit enforces dependency boundaries: `domain` and
+`application` depend only on core contracts and Java; `config` wires real
+adapters to services.
+
+These tests do not validate a real Google consent screen, browser/BFF behavior,
+production network isolation, or deployed infrastructure and credentials.
 
 ## Deploy
 
@@ -100,9 +158,3 @@ CI never touches Kubernetes. The image tag in the GitOps repository's
 rollback is `git revert` of that commit.
 
 Deployed to the `prod` namespace of the `lore-sentry-k8s` EKS cluster via Argo CD.
-
-## Not implemented yet
-
-- Repositories and domain code on top of the schema.
-- The Google OAuth sign-in flow.
-- Token issuance, and the verification side that `loresentry-gateway` needs.

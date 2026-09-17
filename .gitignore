@@ -37,3 +37,8 @@ out/
 .vscode/
 
 .DS_Store
+
+# Local credentials and generated development keys
+.local/
+.env
+.env.*
