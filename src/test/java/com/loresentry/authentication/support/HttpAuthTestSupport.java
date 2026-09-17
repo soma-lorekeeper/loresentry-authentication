@@ -49,6 +49,7 @@ public abstract class HttpAuthTestSupport extends DatabaseTestSupport {
         var id = prepared.body().get("login_request_id").asString();
         var parameters = MockGoogle.form(URI.create(prepared.body().get("authorization_url").asString()).getRawQuery());
         var code = UUID.randomUUID().toString();
+        google.expectedVerifiers.put(code, states.find(id).orElseThrow().codeVerifier());
         google.tokens.put(code, google.sign(google.claims(parameters.get("nonce"), subject).build()));
         return new Pending(id, parameters.get("state"), code);
     }
