@@ -9,5 +9,8 @@ public abstract class DatabaseTestSupport {
         registry.add("spring.datasource.url", TestInfrastructure::jdbcUrl);
         registry.add("spring.datasource.username", TestInfrastructure::username);
         registry.add("spring.datasource.password", TestInfrastructure::password);
+        registry.add("auth.jwt.private-key-base64", () -> TestKeys.PRIVATE);
+        registry.add("auth.jwt.public-key-path", () -> TestKeys.PUBLIC_FILE.toString());
+        registry.add("auth.jwt.key-id", () -> TestKeys.KID);
     }
 }
