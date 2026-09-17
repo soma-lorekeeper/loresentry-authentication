@@ -22,8 +22,8 @@ public final class RegistrationService implements RegisterIdentityUseCase {
         try {
             var existing = accounts.findByIdentity(identity.provider(), identity.subject());
             if (existing.isPresent()) return refreshEmail(existing.get(), identity);
-            var now = clock.instant();
-            var user = new User(ids.generate(), initialName(identity.name()), now, now);
+            var now = clock.instant().truncatedTo(java.time.temporal.ChronoUnit.MICROS);
+            var user = new User(ids.generate(), DisplayNames.initial(identity.name()), now, now);
             var email = hasEmail(identity.email()) ? identity.email() : null;
             try {
                 return accounts.create(user, new OAuthIdentity(identity.provider(), identity.subject(), user.id(), email)).user();
@@ -40,13 +40,9 @@ public final class RegistrationService implements RegisterIdentityUseCase {
 
     private User refreshEmail(AccountStore.Account account, OidcClient.Identity identity) {
         if (!hasEmail(identity.email()) || identity.email().equals(account.identity().email())) return account.user();
-        return accounts.updateEmail(identity.provider(), identity.subject(), identity.email(), clock.instant()).user();
+        return accounts.updateEmail(identity.provider(), identity.subject(), identity.email(),
+                clock.instant().truncatedTo(java.time.temporal.ChronoUnit.MICROS)).user();
     }
     private static boolean hasEmail(String value) { return value != null && !value.isBlank(); }
     private static boolean invalid(String value, int limit) { return value == null || value.isBlank() || value.codePointCount(0, value.length()) > limit; }
-    private static String initialName(String name) {
-        if (name == null || name.isBlank()) return "사용자";
-        var value = name.strip();
-        return value.codePointCount(0, value.length()) > 50 ? value.substring(0, value.offsetByCodePoints(0, 50)) : value;
-    }
 }
