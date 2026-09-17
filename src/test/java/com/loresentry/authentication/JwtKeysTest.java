@@ -40,7 +40,7 @@ class JwtKeysTest {
                 .run(c -> assertThat(c).hasFailed());
     }
     private ApplicationContextRunner context(String privateKey, String publicPath, String kid) {
-        return new ApplicationContextRunner().withUserConfiguration(JwtConfiguration.class)
+        return new ApplicationContextRunner().withUserConfiguration(JwtConfiguration.class, com.loresentry.authentication.config.CoreConfiguration.class)
                 .withPropertyValues("auth.jwt.private-key-base64=" + privateKey,
                         "auth.jwt.public-key-path=" + publicPath, "auth.jwt.key-id=" + kid);
     }
