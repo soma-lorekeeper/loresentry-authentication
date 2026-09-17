@@ -22,3 +22,9 @@ spring:
 server:
   port: 8000
   shutdown: graceful
+
+auth:
+  jwt:
+    private-key-base64: ${AUTH_JWT_PRIVATE_KEY_BASE64:}
+    public-key-path: ${AUTH_JWT_PUBLIC_KEY_PATH:}
+    key-id: ${AUTH_JWT_KEY_ID:}
