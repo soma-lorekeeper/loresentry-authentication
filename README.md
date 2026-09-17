@@ -106,6 +106,9 @@ ID with the BFF.
 
 ## Test
 
+See [the verification record](TEST_COVERAGE.md) for design coverage and the
+recorded test result.
+
 ```bash
 ./gradlew build
 ```

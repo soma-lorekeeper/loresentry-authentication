@@ -20,6 +20,7 @@ public final class MockGoogle implements AutoCloseable {
     public final java.security.KeyPair keys = TestKeys.generate(2048);
     public final String kid = UUID.randomUUID().toString();
     public final Map<String, String> tokens = new ConcurrentHashMap<>();
+    public final Map<String, String> expectedVerifiers = new ConcurrentHashMap<>();
     public final AtomicInteger tokenCalls = new AtomicInteger(), keyCalls = new AtomicInteger(), unexpectedCalls = new AtomicInteger();
     public volatile Map<String, String> lastForm = Map.of();
     public volatile String lastAuthorization;
@@ -31,10 +32,12 @@ public final class MockGoogle implements AutoCloseable {
             server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0); server.setExecutor(executor);
             server.createContext("/token", exchange -> {
                 tokenCalls.incrementAndGet(); lastAuthorization = exchange.getRequestHeaders().getFirst("Authorization");
-                lastForm = form(new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8));
+                var requestForm = form(new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8));
+                lastForm = requestForm;
                 if (tokenDelayMillis > 0) try { Thread.sleep(tokenDelayMillis); } catch (InterruptedException e) { Thread.currentThread().interrupt(); }
-                var token = tokens.get(lastForm.get("code"));
-                if (token == null) respond(exchange, 400, "{\"error\":\"invalid_grant\"}");
+                var token = tokens.get(requestForm.get("code"));
+                var expectedVerifier = expectedVerifiers.get(requestForm.get("code"));
+                if (token == null || (expectedVerifier != null && !expectedVerifier.equals(requestForm.get("code_verifier")))) respond(exchange, 400, "{\"error\":\"invalid_grant\"}");
                 else respond(exchange, 200, new JsonMapper().writeValueAsString(Map.of("access_token", "google-access", "token_type", "Bearer", "expires_in", 3600, "id_token", token)));
             });
             server.createContext("/jwks", exchange -> {
