@@ -7,6 +7,7 @@ import java.util.UUID;
 
 @Entity
 @Table(name = "users")
+@org.hibernate.annotations.DynamicUpdate
 public class UserEntity {
     @Id private UUID id;
     @Column(name = "display_name", nullable = false, length = 50) private String displayName;
