@@ -42,6 +42,19 @@ Boot 4 moved several test annotations. The one this repo uses is
 The gateway exposes this service publicly at `GET /auth`, which calls `/` here
 and returns the payload nested under `upstream`.
 
+## Schema
+
+Flyway runs on startup and applies `src/main/resources/db/migration` to the
+`authentication` database.
+
+| Table | Purpose |
+| --- | --- |
+| `users` | Google account (`google_subject`), email, editable display name, `ACTIVE`/`DELETED` status |
+| `auth_sessions` | Refresh-token sessions: token hash only, expiry, revocation, last use |
+
+Other services store `users.id` as a plain value; there are no cross-database
+foreign keys.
+
 ## Run locally
 
 ```bash
@@ -56,7 +69,8 @@ curl localhost:8000/health
 ```
 
 Covers context startup, that virtual threads are actually enabled, and both
-endpoints through `MockMvc`. No AWS or network access required.
+endpoints through `MockMvc`. `MigrationTest` applies the Flyway migrations to a
+`postgres:18` container through Testcontainers, so Docker must be running.
 
 ## Deploy
 
@@ -75,9 +89,6 @@ Deployed to the `prod` namespace of the `lore-sentry-k8s` EKS cluster via Argo C
 
 ## Not implemented yet
 
-- PostgreSQL persistence for accounts and sessions. The database is not
-  provisioned yet, so no driver, ORM or migration tool is wired in — adding one
-  before the database exists would only make the container fail to start with
-  `Failed to configure a DataSource`.
+- Repositories and domain code on top of the schema.
 - The Google OAuth sign-in flow.
 - Token issuance, and the verification side that `loresentry-gateway` needs.
