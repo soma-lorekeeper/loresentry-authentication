@@ -20,6 +20,7 @@ class AccountSchemaTest extends DatabaseTestSupport {
     @Autowired EntityManager entityManager;
     @Autowired PlatformTransactionManager transactionManager;
     @Autowired UserIdGenerator ids;
+    @Autowired AccountEntityMapper mapper;
 
     @Test
     void flywaySchemaAcceptsUuidV7AndMultipleIdentitiesWithoutEmailUniqueness() throws Exception {
@@ -28,15 +29,28 @@ class AccountSchemaTest extends DatabaseTestSupport {
         var now = Instant.parse("2026-09-17T00:00:00Z");
         var tx = new TransactionTemplate(transactionManager);
         tx.executeWithoutResult(status -> {
-            var user = new UserEntity(new User(userId, "사용자", now, now));
+            var user = mapper.toEntity(new User(userId, "사용자", now, now));
             entityManager.persist(user);
-            entityManager.persist(new OAuthIdentityEntity(new OAuthIdentity("google", "first-" + userId, userId, null), user));
-            entityManager.persist(new OAuthIdentityEntity(new OAuthIdentity("google", "second-" + userId, userId, "same@example.test"), user));
-            entityManager.persist(new OAuthIdentityEntity(new OAuthIdentity("other", "third-" + userId, userId, "same@example.test"), user));
+            for (var identity : java.util.List.of(
+                    new OAuthIdentity("google", "first-" + userId, userId, null),
+                    new OAuthIdentity("google", "second-" + userId, userId, "same@example.test"),
+                    new OAuthIdentity("other", "third-" + userId, userId, "same@example.test"))) {
+                var link = mapper.toEntity(identity, user);
+                assertThat(link.getUser()).isSameAs(user);
+                entityManager.persist(link);
+            }
             entityManager.flush();
         });
-        User loaded = tx.execute(status -> entityManager.find(UserEntity.class, userId).toDomain());
+        User loaded = tx.execute(status -> mapper.toDomain(entityManager.find(UserEntity.class, userId)));
         assertThat(loaded).isEqualTo(new User(userId, "사용자", now, now));
+        tx.executeWithoutResult(status -> {
+            var link = entityManager.find(OAuthIdentityEntity.class, new OAuthIdentityId("google", "first-" + userId));
+            var account = mapper.toAccount(link);
+            assertThat(account.user()).isEqualTo(loaded);
+            assertThat(account.identity()).isEqualTo(new OAuthIdentity("google", "first-" + userId, userId, null));
+            var other = entityManager.find(OAuthIdentityEntity.class, new OAuthIdentityId("other", "third-" + userId));
+            assertThat(mapper.toDomain(other)).isEqualTo(new OAuthIdentity("other", "third-" + userId, userId, "same@example.test"));
+        });
         try (var connection = TestInfrastructure.connection(); var statement = connection.createStatement()) {
             try (var result = statement.executeQuery("SELECT success FROM flyway_schema_history WHERE version = '1'")) {
                 assertThat(result.next()).isTrue(); assertThat(result.getBoolean(1)).isTrue();

@@ -62,6 +62,18 @@ callback's mutually exclusive `code`/`error` fields. Unknown fields and non-stri
 values for string fields are rejected. Display-name business rules remain in
 the domain and retain the `INVALID_DISPLAY_NAME` error.
 
+MapStruct maps callback request DTOs to service inputs through `AuthRequestMapper`
+and service results to response DTOs through `AuthResponseMapper`. The response
+mapper flattens callback tokens and calls an explicit Java method to convert
+consumption into `true`, `false` or `null`. Unmapped target fields fail compilation.
+After `./gradlew compileJava`, generated mappers are available under
+`build/generated/sources/annotationProcessor/java/main/`.
+
+`AccountEntityMapper` converts JPA entities and domain objects inside persistence
+transactions. It uses constructors for new entities and retains the supplied user
+entity for identity associations. Existing nickname, email and timestamp updates
+still use the entities' dedicated methods.
+
 ## Schema
 
 Flyway runs on startup and applies `src/main/resources/db/migration` to the
@@ -123,6 +135,11 @@ Missing or invalid JWT/Google configuration fails startup. Private keys, Google
 secrets and token values must not be committed. Share only the public key and key
 ID with the BFF.
 
+`JwtProperties` and `GoogleProperties` bind the `auth.jwt` and `auth.google`
+settings with `@ConfigurationProperties` and validate required values at startup.
+The environment variables above remain unchanged. RSA key validation and the
+Google callback URL restrictions still run when the adapters are configured.
+
 ## Test
 
 See [the verification record](TEST_COVERAGE.md) for design coverage and the
@@ -151,8 +168,9 @@ error responses. ArchUnit enforces dependency boundaries: `domain` and
 wires real adapters to services. Lombok's `@RequiredArgsConstructor` generates
 simple dependency-injection constructors at compile time. Constructors with
 initialization logic remain explicit. `lombok.config` disables generated Lombok
-annotations so the core bytecode keeps this dependency boundary. Jackson and
-Bean Validation annotations are confined to the web DTOs.
+annotations so the core bytecode keeps this dependency boundary. Jackson remains
+in the web adapter; MapStruct is used by the web and persistence adapters. Bean
+Validation is used by web DTOs and configuration properties.
 
 These tests do not validate a real Google consent screen, browser/BFF behavior,
 production network isolation, or deployed infrastructure and credentials.

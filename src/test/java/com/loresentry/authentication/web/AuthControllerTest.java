@@ -1,11 +1,14 @@
 package com.loresentry.authentication.web;
 
 import com.loresentry.authentication.adapter.in.web.AuthController;
+import com.loresentry.authentication.adapter.in.web.mapper.AuthResponseMapperImpl;
+import com.loresentry.authentication.adapter.in.web.mapper.AuthRequestMapperImpl;
 import com.loresentry.authentication.application.port.in.*;
 import com.loresentry.authentication.config.JacksonConfiguration;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
+import org.junit.jupiter.params.provider.CsvSource;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.webmvc.test.autoconfigure.WebMvcTest;
 import org.springframework.context.annotation.Import;
@@ -18,7 +21,7 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
 
 @WebMvcTest(AuthController.class)
-@Import(JacksonConfiguration.class)
+@Import({JacksonConfiguration.class, AuthResponseMapperImpl.class, AuthRequestMapperImpl.class})
 class AuthControllerTest {
     @Autowired MockMvc mvc;
     @MockitoBean LoginUseCase login;
@@ -30,6 +33,7 @@ class AuthControllerTest {
         when(login.prepare()).thenReturn(new LoginUseCase.PreparedLogin(URI.create("https://accounts.google.com/authorize"), "request", atExpiry));
         mvc.perform(post("/auth/oauth/google/prepare").contentType("application/json").content("{}"))
             .andExpect(status().isOk()).andExpect(jsonPath("$.length()").value(3)).andExpect(jsonPath("$.login_request_id").value("request"))
+            .andExpect(jsonPath("$.authorization_url").value("https://accounts.google.com/authorize"))
             .andExpect(jsonPath("$.expires_at").value(atExpiry.toString())).andExpect(header().string("Cache-Control", "no-store"))
             .andExpect(header().doesNotExist("Set-Cookie")).andExpect(jsonPath("$.login_request_consumed").doesNotExist());
         when(login.callback(any())).thenReturn(new LoginUseCase.LoginResult(pair, AuthFailure.Consumption.CONSUMED));
@@ -41,11 +45,28 @@ class AuthControllerTest {
         when(refresh.refresh("rt")).thenReturn(pair);
         mvc.perform(post("/auth/tokens/refresh").contentType("application/json").content("{\"refresh_token\":\"rt\"}"))
             .andExpect(status().isOk()).andExpect(jsonPath("$.length()").value(4)).andExpect(jsonPath("$.access_expires_at").value(atExpiry.toString()))
+            .andExpect(jsonPath("$.access_token").value("access")).andExpect(jsonPath("$.refresh_token").value("refresh"))
+            .andExpect(jsonPath("$.refresh_expires_at").value(rtExpiry.toString()))
             .andExpect(jsonPath("$.login_request_consumed").doesNotExist()).andExpect(header().string("Cache-Control", "no-store"));
     }
     @Test void revokeReturns204WithoutBody() throws Exception {
         mvc.perform(post("/auth/tokens/revoke").contentType("application/json").content("{\"refresh_token\":\"rt\"}"))
             .andExpect(status().isNoContent()).andExpect(content().string("")); verify(revoke).revoke("rt");
+    }
+
+    @ParameterizedTest
+    @CsvSource(value = {"CONSUMED,true", "NOT_CONSUMED,false", "UNKNOWN,NULL"}, nullValues = "NULL")
+    void callbackMapsNestedTokensAndAllConsumptionStates(AuthFailure.Consumption consumption, Boolean expected) throws Exception {
+        when(login.callback(any())).thenReturn(new LoginUseCase.LoginResult(pair, consumption));
+        mvc.perform(post("/auth/oauth/google/callback").contentType("application/json")
+                .content("{\"login_request_id\":\"request\",\"state\":\"state\",\"code\":\"code\"}"))
+            .andExpect(status().isOk()).andExpect(jsonPath("$.length()").value(5))
+            .andExpect(jsonPath("$.access_token").value("access"))
+            .andExpect(jsonPath("$.access_expires_at").value(atExpiry.toString()))
+            .andExpect(jsonPath("$.refresh_token").value("refresh"))
+            .andExpect(jsonPath("$.refresh_expires_at").value(rtExpiry.toString()))
+            .andExpect(jsonPath("$.login_request_consumed").value(org.hamcrest.Matchers.equalTo(expected)));
+        verify(login).callback(new LoginUseCase.Callback("request", "state", "code", null));
     }
     @Test void rejectsMissingMalformedOrConflictingBodyFieldsAndUrlOnlyCredentials() throws Exception {
         for (var body : java.util.List.of("{}", "[]", "{broken", "{\"refresh_token\":1}", "{\"refresh_token\":\"\"}"))

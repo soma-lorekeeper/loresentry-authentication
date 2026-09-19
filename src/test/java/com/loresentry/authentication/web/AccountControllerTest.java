@@ -1,6 +1,7 @@
 package com.loresentry.authentication.web;
 
 import com.loresentry.authentication.adapter.in.web.AccountController;
+import com.loresentry.authentication.adapter.in.web.mapper.AuthResponseMapperImpl;
 import com.loresentry.authentication.application.port.in.*;
 import com.loresentry.authentication.config.JacksonConfiguration;
 import org.junit.jupiter.api.Test;
@@ -15,7 +16,7 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
 
 @WebMvcTest(AccountController.class)
-@Import(JacksonConfiguration.class)
+@Import({JacksonConfiguration.class, AuthResponseMapperImpl.class})
 class AccountControllerTest {
     @Autowired MockMvc mvc;
     @MockitoBean AccountUseCase accounts;

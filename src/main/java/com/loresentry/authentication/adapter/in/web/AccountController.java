@@ -3,6 +3,7 @@ package com.loresentry.authentication.adapter.in.web;
 import com.loresentry.authentication.application.port.in.*;
 import com.loresentry.authentication.adapter.in.web.dto.AuthRequests;
 import com.loresentry.authentication.adapter.in.web.dto.AuthResponses;
+import com.loresentry.authentication.adapter.in.web.mapper.AuthResponseMapper;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import jakarta.servlet.http.HttpServletRequest;
@@ -15,6 +16,7 @@ import java.util.*;
 @RequiredArgsConstructor
 public class AccountController {
     private final AccountUseCase accounts;
+    private final AuthResponseMapper responses;
     @GetMapping public ResponseEntity<AuthResponses.Profile> get(HttpServletRequest request) { return profile(accounts.get(userId(request))); }
     @PatchMapping public ResponseEntity<AuthResponses.Profile> rename(HttpServletRequest request, @Valid @RequestBody AuthRequests.Rename body) {
         UUID id = userId(request);
@@ -32,6 +34,6 @@ public class AccountController {
     }
     private AuthFailure invalidRequest() { return new AuthFailure(AuthFailure.Reason.INVALID_REQUEST); }
     private ResponseEntity<AuthResponses.Profile> profile(AccountUseCase.Profile profile) {
-        return ResponseEntity.ok().header("Cache-Control", "no-store").body(AuthResponses.Profile.from(profile));
+        return ResponseEntity.ok().header("Cache-Control", "no-store").body(responses.profile(profile));
     }
 }
