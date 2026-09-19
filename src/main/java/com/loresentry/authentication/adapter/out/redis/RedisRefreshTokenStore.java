@@ -1,5 +1,6 @@
 package com.loresentry.authentication.adapter.out.redis;
 
+import lombok.RequiredArgsConstructor;
 import com.loresentry.authentication.application.port.out.*;
 import org.springframework.dao.TransientDataAccessException;
 import org.springframework.data.redis.connection.RedisConnection;
@@ -15,13 +16,13 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Function;
 
 @Component
+@RequiredArgsConstructor
 public class RedisRefreshTokenStore implements RefreshTokenStore {
     private final StringRedisTemplate redis;
     private final Clock clock;
     private final java.util.concurrent.ExecutorService deletions = java.util.concurrent.Executors.newVirtualThreadPerTaskExecutor();
     @jakarta.annotation.PreDestroy
     public void close() { deletions.shutdownNow(); }
-    public RedisRefreshTokenStore(StringRedisTemplate redis, Clock clock) { this.redis = redis; this.clock = clock; }
     public void save(UUID jti, UUID userId, Instant expiresAt) {
         long ttl = Duration.between(clock.instant(), expiresAt).toMillis();
         if (ttl <= 0) throw new PortFailure(PortFailure.Kind.INVALID_DATA, PortFailure.Execution.NOT_EXECUTED, false);

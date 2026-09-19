@@ -1,18 +1,17 @@
 package com.loresentry.authentication.application.service;
 
+import lombok.RequiredArgsConstructor;
 import com.loresentry.authentication.application.port.in.*;
 import com.loresentry.authentication.application.port.out.*;
 import com.loresentry.authentication.domain.*;
 import java.time.Clock;
 import static com.loresentry.authentication.application.port.in.AuthFailure.Reason.*;
 
+@RequiredArgsConstructor
 public final class RegistrationService implements RegisterIdentityUseCase {
     private final AccountStore accounts;
     private final UserIdGenerator ids;
     private final Clock clock;
-    public RegistrationService(AccountStore accounts, UserIdGenerator ids, Clock clock) {
-        this.accounts = accounts; this.ids = ids; this.clock = clock;
-    }
 
     @Override public User register(OidcClient.Identity identity) {
         if (identity == null || invalid(identity.provider(), 32) || invalid(identity.subject(), 255)

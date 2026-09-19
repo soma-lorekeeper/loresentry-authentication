@@ -1,5 +1,6 @@
 package com.loresentry.authentication.adapter.out.persistence;
 
+import lombok.RequiredArgsConstructor;
 import com.loresentry.authentication.application.port.out.*;
 import com.loresentry.authentication.domain.*;
 import java.time.Instant;
@@ -11,9 +12,9 @@ import org.springframework.stereotype.Component;
 
 /** The transaction proxy has already rolled back before failures cross this boundary. */
 @Component
+@RequiredArgsConstructor
 public class JpaAccountStore implements AccountStore {
     private final AccountTransactions transactions;
-    public JpaAccountStore(AccountTransactions transactions) { this.transactions = transactions; }
     public Optional<Account> findByIdentity(String provider, String subject) { return invoke(() -> transactions.findByIdentity(provider, subject)); }
     public Optional<Account> findById(UUID id) { return invoke(() -> transactions.findById(id)); }
     public Account create(User user, OAuthIdentity identity) { return invoke(() -> transactions.create(user, identity)); }

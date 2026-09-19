@@ -1,5 +1,6 @@
 package com.loresentry.authentication.application.service;
 
+import lombok.RequiredArgsConstructor;
 import com.loresentry.authentication.application.port.in.AuthFailure;
 import com.loresentry.authentication.application.port.in.LoginUseCase.PreparedLogin;
 import com.loresentry.authentication.application.port.out.*;
@@ -8,14 +9,12 @@ import java.security.SecureRandom;
 import java.time.Clock;
 import java.time.temporal.ChronoUnit;
 
+@RequiredArgsConstructor
 public final class OAuthRequests {
     private final OAuthStateStore store;
     private final OidcClient provider;
     private final Clock clock;
     private final SecureRandom random;
-    public OAuthRequests(OAuthStateStore store, OidcClient provider, Clock clock, SecureRandom random) {
-        this.store = store; this.provider = provider; this.clock = clock; this.random = random;
-    }
     public PreparedLogin prepare() {
         try {
             var settings = provider.settings();

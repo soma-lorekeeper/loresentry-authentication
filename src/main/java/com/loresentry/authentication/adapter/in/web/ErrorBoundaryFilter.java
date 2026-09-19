@@ -1,5 +1,6 @@
 package com.loresentry.authentication.adapter.in.web;
 
+import lombok.RequiredArgsConstructor;
 import jakarta.servlet.*;
 import jakarta.servlet.http.*;
 import org.springframework.core.Ordered;
@@ -11,9 +12,9 @@ import java.io.IOException;
 
 @Component
 @Order(Ordered.HIGHEST_PRECEDENCE)
+@RequiredArgsConstructor
 public class ErrorBoundaryFilter extends OncePerRequestFilter {
     private final JsonMapper mapper;
-    public ErrorBoundaryFilter(JsonMapper mapper) { this.mapper = mapper; }
     @Override protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response, FilterChain chain)
         throws ServletException, IOException {
         try { chain.doFilter(request, response); }

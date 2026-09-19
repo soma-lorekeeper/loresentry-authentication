@@ -1,5 +1,6 @@
 package com.loresentry.authentication.adapter.out.redis;
 
+import lombok.RequiredArgsConstructor;
 import com.loresentry.authentication.application.port.out.OAuthStateStore.State;
 import com.loresentry.authentication.application.port.out.PortFailure;
 import com.loresentry.authentication.domain.OAuthSecrets;
@@ -8,11 +9,11 @@ import java.time.Instant;
 import java.util.Map;
 import java.util.Set;
 
+@RequiredArgsConstructor
 public final class OAuthStateJson {
     private static final Set<String> FIELDS = Set.of("schema_version", "registration_id", "client_id", "redirect_uri",
             "state", "nonce", "code_verifier", "created_at", "expires_at");
     private final JsonMapper mapper;
-    public OAuthStateJson(JsonMapper mapper) { this.mapper = mapper; }
     public String encode(State value) {
         validate(value);
         return mapper.writeValueAsString(Map.of("schema_version", value.schemaVersion(),
