@@ -2,9 +2,11 @@ package com.loresentry.authentication.web;
 
 import com.loresentry.authentication.adapter.in.web.AccountController;
 import com.loresentry.authentication.application.port.in.*;
+import com.loresentry.authentication.config.JacksonConfiguration;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.webmvc.test.autoconfigure.WebMvcTest;
+import org.springframework.context.annotation.Import;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
 import java.util.UUID;
@@ -13,6 +15,7 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
 
 @WebMvcTest(AccountController.class)
+@Import(JacksonConfiguration.class)
 class AccountControllerTest {
     @Autowired MockMvc mvc;
     @MockitoBean AccountUseCase accounts;
@@ -36,7 +39,10 @@ class AccountControllerTest {
         verifyNoInteractions(accounts);
     }
     @Test void refusesUnknownModificationFields() throws Exception {
-        for (var body : java.util.List.of("{}", "{\"display_name\":1}", "{\"display_name\":\"Name\",\"email\":\"evil@example.com\"}", "{\"display_name\":\"Name\",\"id\":\""+id+"\"}"))
+        for (var body : java.util.List.of("{}", "null", "[]", "{\"display_name\":null}",
+                "{\"display_name\":1}", "{\"display_name\":1.5}", "{\"display_name\":true}",
+                "{\"display_name\":[]}", "{\"display_name\":{}}", "{\"displayName\":\"Name\"}",
+                "{\"display_name\":\"Name\",\"email\":\"evil@example.com\"}", "{\"display_name\":\"Name\",\"id\":\""+id+"\"}"))
             mvc.perform(patch("/auth/users/me").header("X-User-Id", id.toString()).contentType("application/json").content(body))
                 .andExpect(status().isBadRequest()).andExpect(jsonPath("$.code").value("INVALID_REQUEST"));
         verifyNoInteractions(accounts);

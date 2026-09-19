@@ -1,5 +1,6 @@
 package com.loresentry.authentication.adapter.in.web;
 
+import lombok.RequiredArgsConstructor;
 import java.util.Map;
 
 import org.springframework.dao.DataAccessException;
@@ -10,15 +11,13 @@ import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 @RestController
+@RequiredArgsConstructor
 public class DbHealthController {
 
     private static final String SERVICE = "authentication-api";
 
     private final JdbcClient jdbcClient;
 
-    public DbHealthController(JdbcClient jdbcClient) {
-        this.jdbcClient = jdbcClient;
-    }
 
     @GetMapping("/health/db")
     public ResponseEntity<Map<String, Object>> databaseHealth() {

@@ -1,5 +1,6 @@
 package com.loresentry.authentication.application.service;
 
+import lombok.RequiredArgsConstructor;
 import com.loresentry.authentication.application.port.in.*;
 import com.loresentry.authentication.application.port.out.*;
 import com.loresentry.authentication.domain.DisplayNames;
@@ -7,10 +8,10 @@ import java.time.Clock;
 import java.util.UUID;
 import static com.loresentry.authentication.application.port.in.AuthFailure.Reason.*;
 
+@RequiredArgsConstructor
 public final class AccountService implements AccountUseCase {
     private final AccountStore accounts;
     private final Clock clock;
-    public AccountService(AccountStore accounts, Clock clock) { this.accounts = accounts; this.clock = clock; }
     public Profile get(UUID userId) {
         if (userId == null) throw new AuthFailure(USER_CONTEXT_REQUIRED);
         try { return profile(accounts.findById(userId).orElseThrow(() -> new AuthFailure(USER_NOT_FOUND))); }

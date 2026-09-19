@@ -1,19 +1,18 @@
 package com.loresentry.authentication.application.service;
 
+import lombok.RequiredArgsConstructor;
 import com.loresentry.authentication.application.port.in.*;
 import com.loresentry.authentication.application.port.out.*;
 import static com.loresentry.authentication.application.port.in.AuthFailure.Consumption.*;
 import static com.loresentry.authentication.application.port.in.AuthFailure.Reason.*;
 
+@RequiredArgsConstructor
 public final class LoginService implements LoginUseCase {
     private final OAuthRequests requests;
     private final OidcClient provider;
     private final RegisterIdentityUseCase accounts;
     private final JwtTokens jwt;
     private final RefreshTokenStore refresh;
-    public LoginService(OAuthRequests requests, OidcClient provider, RegisterIdentityUseCase accounts, JwtTokens jwt, RefreshTokenStore refresh) {
-        this.requests = requests; this.provider = provider; this.accounts = accounts; this.jwt = jwt; this.refresh = refresh;
-    }
     public PreparedLogin prepare() { return requests.prepare(); }
     public LoginResult callback(Callback command) {
         OAuthStateStore.State state;

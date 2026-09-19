@@ -1,13 +1,14 @@
 package com.loresentry.authentication.application.service;
 
+import lombok.RequiredArgsConstructor;
 import com.loresentry.authentication.application.port.in.*;
 import com.loresentry.authentication.application.port.out.*;
 import static com.loresentry.authentication.application.port.in.AuthFailure.Reason.*;
 
+@RequiredArgsConstructor
 public final class RefreshService implements RefreshUseCase {
     private final JwtTokens jwt;
     private final RefreshTokenStore store;
-    public RefreshService(JwtTokens jwt, RefreshTokenStore store) { this.jwt = jwt; this.store = store; }
     public TokenPair refresh(String token) {
         JwtTokens.RefreshClaims claims;
         try { claims = jwt.verifyRefresh(token, false); }

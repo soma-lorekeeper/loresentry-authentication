@@ -1,54 +1,41 @@
 package com.loresentry.authentication.adapter.in.web;
 
 import com.loresentry.authentication.application.port.in.*;
+import com.loresentry.authentication.adapter.in.web.dto.AuthRequests;
+import com.loresentry.authentication.adapter.in.web.dto.AuthResponses;
+import jakarta.validation.Valid;
+import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
-import tools.jackson.databind.JsonNode;
-import java.util.*;
 
 @RestController
 @RequestMapping("/auth")
+@RequiredArgsConstructor
 public class AuthController {
     private final LoginUseCase login;
     private final RefreshUseCase refresh;
     private final RevokeUseCase revoke;
-    public AuthController(LoginUseCase login, RefreshUseCase refresh, RevokeUseCase revoke) { this.login = login; this.refresh = refresh; this.revoke = revoke; }
+
+
     @PostMapping("/oauth/google/prepare")
-    public ResponseEntity<Map<String, Object>> prepare(@RequestBody JsonNode body) {
-        JsonInputs.object(body, Set.of(), false);
+    public ResponseEntity<AuthResponses.PreparedLogin> prepare(@Valid @RequestBody AuthRequests.Prepare request) {
         var prepared = login.prepare();
-        return ok(Map.of("authorization_url", prepared.authorizationUrl(), "login_request_id", prepared.loginRequestId(), "expires_at", prepared.expiresAt()));
+        return ok(AuthResponses.PreparedLogin.from(prepared));
     }
     @PostMapping("/oauth/google/callback")
-    public ResponseEntity<Map<String, Object>> callback(@RequestBody JsonNode body) {
-        JsonInputs.object(body, Set.of("login_request_id", "state", "code", "error"), true);
-        var id = JsonInputs.required(body, "login_request_id", true); var state = JsonInputs.required(body, "state", true);
-        var code = JsonInputs.optional(body, "code", true); var error = JsonInputs.optional(body, "error", true);
-        if ((code == null || code.isBlank()) == (error == null || error.isBlank()) || (code != null && error != null)) throw JsonInputs.invalid(true);
-        var result = login.callback(new LoginUseCase.Callback(id, state, code, error));
-        var response = tokens(result.tokens());
-        Boolean consumed = switch (result.consumption()) {
-            case CONSUMED -> true; case NOT_CONSUMED -> false; case UNKNOWN -> null;
-        };
-        response.put("login_request_consumed", consumed);
-        return ok(response);
+    public ResponseEntity<AuthResponses.Callback> callback(@Valid @RequestBody AuthRequests.Callback request) {
+        var result = login.callback(new LoginUseCase.Callback(
+                request.loginRequestId(), request.state(), request.code(), request.error()));
+        return ok(AuthResponses.Callback.from(result));
     }
     @PostMapping("/tokens/refresh")
-    public ResponseEntity<Map<String, Object>> refresh(@RequestBody JsonNode body) {
-        JsonInputs.object(body, Set.of("refresh_token"), false);
-        return ok(tokens(refresh.refresh(JsonInputs.required(body, "refresh_token", false))));
+    public ResponseEntity<AuthResponses.Tokens> refresh(@Valid @RequestBody AuthRequests.RefreshToken request) {
+        return ok(AuthResponses.Tokens.from(refresh.refresh(request.refreshToken())));
     }
     @PostMapping("/tokens/revoke")
-    public ResponseEntity<Void> revoke(@RequestBody JsonNode body) {
-        JsonInputs.object(body, Set.of("refresh_token"), false);
-        revoke.revoke(JsonInputs.required(body, "refresh_token", false));
+    public ResponseEntity<Void> revoke(@Valid @RequestBody AuthRequests.RefreshToken request) {
+        revoke.revoke(request.refreshToken());
         return ResponseEntity.noContent().header("Cache-Control", "no-store").build();
     }
-    private Map<String, Object> tokens(TokenPair pair) {
-        Map<String, Object> body = new LinkedHashMap<>();
-        body.put("access_token", pair.accessToken()); body.put("access_expires_at", pair.accessExpiresAt());
-        body.put("refresh_token", pair.refreshToken()); body.put("refresh_expires_at", pair.refreshExpiresAt());
-        return body;
-    }
-    private ResponseEntity<Map<String, Object>> ok(Map<String, Object> body) { return ResponseEntity.ok().header("Cache-Control", "no-store").body(body); }
+    private <T> ResponseEntity<T> ok(T body) { return ResponseEntity.ok().header("Cache-Control", "no-store").body(body); }
 }

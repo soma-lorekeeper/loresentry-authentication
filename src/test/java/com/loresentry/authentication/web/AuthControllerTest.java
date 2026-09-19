@@ -2,9 +2,13 @@ package com.loresentry.authentication.web;
 
 import com.loresentry.authentication.adapter.in.web.AuthController;
 import com.loresentry.authentication.application.port.in.*;
+import com.loresentry.authentication.config.JacksonConfiguration;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.webmvc.test.autoconfigure.WebMvcTest;
+import org.springframework.context.annotation.Import;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
 import java.net.URI;
@@ -14,6 +18,7 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
 
 @WebMvcTest(AuthController.class)
+@Import(JacksonConfiguration.class)
 class AuthControllerTest {
     @Autowired MockMvc mvc;
     @MockitoBean LoginUseCase login;
@@ -61,5 +66,72 @@ class AuthControllerTest {
         mvc.perform(post("/auth/tokens/refresh").contentType("application/json").content("{\"refresh_token\":\"rt\"}"))
             .andExpect(status().isServiceUnavailable()).andExpect(jsonPath("$.code").value("REFRESH_SAVE_FAILED"))
             .andExpect(jsonPath("$.next_action").value("RELOGIN")).andExpect(jsonPath("$.login_request_consumed").doesNotExist());
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"{}", "null", "[]", "\"token\"", "{\"refresh_token\":null}",
+        "{\"refresh_token\":123}", "{\"refresh_token\":1.5}", "{\"refresh_token\":true}",
+        "{\"refresh_token\":[]}", "{\"refresh_token\":{}}", "{\"refresh_token\":\"\"}",
+        "{\"refresh_token\":\"　\"}", "{\"refreshToken\":\"rt\"}",
+        "{\"refresh_token\":\"rt\",\"extra\":null}"})
+    void tokenEndpointsRejectInvalidTypesBlankTokensAndUnknownFields(String body) throws Exception {
+        for (var action : java.util.List.of("refresh", "revoke")) {
+            mvc.perform(post("/auth/tokens/" + action).contentType("application/json").content(body))
+                .andExpect(status().isBadRequest()).andExpect(jsonPath("$.code").value("INVALID_REQUEST"))
+                .andExpect(header().string("Cache-Control", "no-store"))
+                .andExpect(jsonPath("$.login_request_consumed").doesNotExist());
+        }
+        verifyNoInteractions(login, refresh, revoke);
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"null", "[]", "\"\"", "true", "{\"extra\":null}"})
+    void prepareRequiresAnEmptyObject(String body) throws Exception {
+        mvc.perform(post("/auth/oauth/google/prepare").contentType("application/json").content(body))
+            .andExpect(status().isBadRequest()).andExpect(jsonPath("$.code").value("INVALID_REQUEST"));
+        verifyNoInteractions(login);
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"{}", "{\"code\":null}", "{\"code\":\"\"}", "{\"code\":\"　\"}",
+        "{\"code\":123}", "{\"error\":false}", "{\"code\":\"code\",\"error\":\"\"}",
+        "{\"code\":\"code\",\"error\":\"denied\"}",
+        "{\"code\":\"code\",\"validOutcome\":true}", "{\"code\":\"code\",\"extra\":null}"})
+    void callbackRequiresExactlyOneNonblankStringOutcome(String outcome) throws Exception {
+        String body = "{\"login_request_id\":\"id\",\"state\":\"state\""
+                + (outcome.equals("{}") ? "}" : "," + outcome.substring(1));
+        mvc.perform(post("/auth/oauth/google/callback").contentType("application/json").content(body))
+            .andExpect(status().isBadRequest()).andExpect(jsonPath("$.code").value("INVALID_REQUEST"))
+            .andExpect(jsonPath("$.login_request_consumed").value(false));
+        verifyNoInteractions(login);
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"{}", "{\"login_request_id\":null,\"state\":\"state\"}",
+        "{\"login_request_id\":\"id\",\"state\":\"　\"}",
+        "{\"login_request_id\":42,\"state\":\"state\"}",
+        "{\"login_request_id\":\"id\",\"state\":false}"})
+    void callbackRejectsMissingBlankOrCoercedIdentifiersBeforeConsumption(String identifiers) throws Exception {
+        String body = "{\"code\":\"code\"" + (identifiers.equals("{}") ? "}" : "," + identifiers.substring(1));
+        mvc.perform(post("/auth/oauth/google/callback").contentType("application/json").content(body))
+            .andExpect(status().isBadRequest()).andExpect(jsonPath("$.code").value("INVALID_REQUEST"))
+            .andExpect(jsonPath("$.login_request_consumed").value(false));
+        verifyNoInteractions(login);
+    }
+
+    @Test void callbackAcceptsExplicitNullAlternativeAndProviderDenial() throws Exception {
+        when(login.callback(any())).thenReturn(new LoginUseCase.LoginResult(pair, AuthFailure.Consumption.UNKNOWN));
+        mvc.perform(post("/auth/oauth/google/callback").contentType("application/json")
+                .content("{\"login_request_id\":\"id\",\"state\":\"state\",\"code\":\"code\",\"error\":null}"))
+            .andExpect(status().isOk()).andExpect(jsonPath("$.length()").value(5))
+            .andExpect(jsonPath("$.login_request_consumed").value(org.hamcrest.Matchers.nullValue()));
+        verify(login).callback(new LoginUseCase.Callback("id", "state", "code", null));
+
+        when(login.callback(any())).thenThrow(new AuthFailure(AuthFailure.Reason.OAUTH_LOGIN_DENIED, AuthFailure.Consumption.CONSUMED));
+        mvc.perform(post("/auth/oauth/google/callback").contentType("application/json")
+                .content("{\"login_request_id\":\"id\",\"state\":\"state\",\"code\":null,\"error\":\"access_denied\"}"))
+            .andExpect(jsonPath("$.code").value("OAUTH_LOGIN_DENIED"))
+            .andExpect(jsonPath("$.login_request_consumed").value(true));
+        verify(login).callback(new LoginUseCase.Callback("id", "state", null, "access_denied"));
     }
 }

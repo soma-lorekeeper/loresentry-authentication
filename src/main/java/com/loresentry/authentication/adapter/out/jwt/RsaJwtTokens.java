@@ -1,5 +1,6 @@
 package com.loresentry.authentication.adapter.out.jwt;
 
+import lombok.RequiredArgsConstructor;
 import com.loresentry.authentication.application.port.in.TokenPair;
 import com.loresentry.authentication.application.port.out.JwtTokens;
 import com.loresentry.authentication.application.port.out.PortFailure;
@@ -10,10 +11,10 @@ import java.time.*;
 import java.time.temporal.ChronoUnit;
 import java.util.*;
 
+@RequiredArgsConstructor
 public final class RsaJwtTokens implements JwtTokens {
     private final JwtKeys keys;
     private final Clock clock;
-    public RsaJwtTokens(JwtKeys keys, Clock clock) { this.keys = keys; this.clock = clock; }
 
     public Issued issue(UUID userId) {
         Objects.requireNonNull(userId);

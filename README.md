@@ -56,6 +56,12 @@ value means that consumption could not be confirmed. Token responses use
 `Cache-Control: no-store`. The API contract is maintained in the Loresentry docs
 repository at `auth/INTERNAL_API.md`.
 
+Web request and response DTOs are Java records in `adapter.in.web.dto`. Jackson
+maps their JSON field names, and Bean Validation checks required values and the
+callback's mutually exclusive `code`/`error` fields. Unknown fields and non-string
+values for string fields are rejected. Display-name business rules remain in
+the domain and retain the `INVALID_DISPLAY_NAME` error.
+
 ## Schema
 
 Flyway runs on startup and applies `src/main/resources/db/migration` to the
@@ -141,8 +147,12 @@ The full HTTP test covers preparation, callback, profile editing, repeat login,
 refresh and logout while preserving another device's token. Unit and adapter
 tests cover validation, database races, Redis command outcomes, time limits and
 error responses. ArchUnit enforces dependency boundaries: `domain` and
-`application` depend only on core contracts and Java; `config` wires real
-adapters to services.
+`application` compiled classes depend only on core contracts and Java; `config`
+wires real adapters to services. Lombok's `@RequiredArgsConstructor` generates
+simple dependency-injection constructors at compile time. Constructors with
+initialization logic remain explicit. `lombok.config` disables generated Lombok
+annotations so the core bytecode keeps this dependency boundary. Jackson and
+Bean Validation annotations are confined to the web DTOs.
 
 These tests do not validate a real Google consent screen, browser/BFF behavior,
 production network isolation, or deployed infrastructure and credentials.

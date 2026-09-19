@@ -1,5 +1,6 @@
 package com.loresentry.authentication.adapter.out.persistence;
 
+import lombok.RequiredArgsConstructor;
 import com.loresentry.authentication.application.port.out.AccountStore.Account;
 import com.loresentry.authentication.domain.*;
 import jakarta.persistence.EntityManager;
@@ -11,12 +12,10 @@ import org.springframework.transaction.annotation.Isolation;
 import org.springframework.transaction.annotation.Transactional;
 
 @Component
+@RequiredArgsConstructor
 public class AccountTransactions {
     private final EntityManager entityManager;
     private final IdentityRepository identities;
-    public AccountTransactions(EntityManager entityManager, IdentityRepository identities) {
-        this.entityManager = entityManager; this.identities = identities;
-    }
 
     @Transactional(readOnly = true)
     public Optional<Account> findByIdentity(String provider, String subject) {
