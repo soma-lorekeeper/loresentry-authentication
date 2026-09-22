@@ -20,7 +20,6 @@ public class AuthController {
     private final AuthResponseMapper responses;
     private final AuthRequestMapper requests;
 
-
     @PostMapping("/oauth/google/prepare")
     public ResponseEntity<AuthResponses.PreparedLogin> prepare(@Valid @RequestBody AuthRequests.Prepare request) {
         var prepared = login.prepare();

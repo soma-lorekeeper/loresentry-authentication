@@ -8,7 +8,7 @@ import org.testcontainers.containers.wait.strategy.Wait;
 
 /** Dedicated disposable services; never reads application or production connection settings. */
 public final class TestInfrastructure {
-    private static final GenericContainer<?> POSTGRES = new GenericContainer<>("postgres:17-alpine")
+    private static final GenericContainer<?> POSTGRES = new GenericContainer<>("postgres:18.4-alpine")
             .withEnv("POSTGRES_DB", "auth_test")
             .withEnv("POSTGRES_USER", "auth_test")
             .withEnv("POSTGRES_PASSWORD", "test-only")

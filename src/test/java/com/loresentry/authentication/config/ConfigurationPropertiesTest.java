@@ -29,7 +29,7 @@ class ConfigurationPropertiesTest {
             "auth.jwt.key-id", "test-key-id",
             "auth.google.client-id", "test-client",
             "auth.google.client-secret", "test-client-secret",
-            "auth.google.redirect-uri", "https://api.loresentry.com/auth/callback/google");
+            "auth.google.redirect-uri", "https://api.loresentry.com/auth/oauth/google/callback");
 
     @Test
     void existingEnvironmentVariablesBindThroughApplicationYaml() throws IOException {
@@ -83,7 +83,7 @@ class ConfigurationPropertiesTest {
         var runner = new ApplicationContextRunner()
                 .withUserConfiguration(GoogleConfiguration.class, CoreConfiguration.class)
                 .withPropertyValues("auth.google.client-id=test-client", "auth.google.client-secret=test-secret",
-                        "auth.google.redirect-uri=http://localhost:3000/auth/callback/google");
+                        "auth.google.redirect-uri=http://localhost:3000/auth/oauth/google/callback");
         runner.run(context -> {
             assertThat(context).hasFailed();
             assertThat(context.getStartupFailure()).hasRootCauseMessage("Invalid Google OAuth configuration");
@@ -92,7 +92,7 @@ class ConfigurationPropertiesTest {
                 .run(context -> {
                     assertThat(context).hasNotFailed();
                     assertThat(context.getBean(GoogleSettings.class).redirectUri())
-                            .isEqualTo("http://localhost:3000/auth/callback/google");
+                            .isEqualTo("http://localhost:3000/auth/oauth/google/callback");
                 });
     }
 

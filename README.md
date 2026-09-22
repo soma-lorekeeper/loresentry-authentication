@@ -81,15 +81,24 @@ Flyway runs on startup and applies `src/main/resources/db/migration` to the
 
 | Table | Purpose |
 | --- | --- |
-| `users` | Google account (`google_subject`), email, editable display name, `ACTIVE`/`DELETED` status |
-| `auth_sessions` | Refresh-token sessions: token hash only, expiry, revocation, last use |
+| `users` | Service user ID, editable display name (up to 50 characters), creation and update timestamps |
+| `oauth_identities` | Provider and provider account ID mapped to a user, with an optional email |
+
+OAuth login requests and refresh-token state are stored in Redis.
+
+V1 is preserved because it has already been applied to the deployed database.
+V2 upgrades those empty tables to the current account schema: it removes
+`auth_sessions` and the unused Google account/status columns from `users`, then
+creates `oauth_identities`. This migration targets the confirmed empty V1 schema;
+it does not migrate existing account or session data. A fresh database applies
+V1 and then V2. PostgreSQL 18 is required because V1 uses `uuidv7()`.
 
 Other services store `users.id` as a plain value; there are no cross-database
 foreign keys.
 
 ## Run locally
 
-Java 21, PostgreSQL and Redis are required. Flyway creates the account tables and
+Java 21, PostgreSQL 18 and Redis are required. Flyway creates the account tables and
 Hibernate validates them at startup. Supply the following environment variables
 before starting the application; `.env` files are not loaded automatically.
 
@@ -104,7 +113,7 @@ before starting the application; `.env` files are not loaded automatically.
 
 Defaults are PostgreSQL `localhost:5432/authentication`, user
 `authentication_svc`, and Redis `localhost:6379`. Production Google callbacks use
-`https://api.loresentry.com/auth/callback/google`. With the `local` profile, an
+`https://api.loresentry.com/auth/oauth/google/callback`. With the `local` profile, an
 HTTP callback is allowed only on localhost or a loopback address. Register the
 same callback in Google and point it at the browser-facing BFF.
 
@@ -149,11 +158,16 @@ recorded test result.
 ./gradlew build
 ```
 
-Tests require Java 21 and Docker. Testcontainers creates disposable PostgreSQL
+Tests require Java 21 and Docker. Testcontainers creates disposable PostgreSQL 18.4
 and Redis instances on random ports, and Google responses come from an in-process
 HTTP/JWK server. Tests generate their own RSA keys and do not require Google
 credentials or production connection settings. The first run downloads Gradle
 dependencies and container images.
+
+Spring integration tests enable Flyway at startup to create the schema before
+Hibernate validates it. `MigrationTest` runs without a Spring context and invokes
+Flyway directly: it checks both a fresh V1-to-V2 installation and an upgrade from
+empty V1 tables, including preservation of the V1 checksum.
 
 ```bash
 ./gradlew test --tests '*FullLoginFlowTest' --rerun-tasks

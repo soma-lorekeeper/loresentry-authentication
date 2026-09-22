@@ -52,7 +52,7 @@ class AccountSchemaTest extends DatabaseTestSupport {
             assertThat(mapper.toDomain(other)).isEqualTo(new OAuthIdentity("other", "third-" + userId, userId, "same@example.test"));
         });
         try (var connection = TestInfrastructure.connection(); var statement = connection.createStatement()) {
-            try (var result = statement.executeQuery("SELECT success FROM flyway_schema_history WHERE version = '1'")) {
+            try (var result = statement.executeQuery("SELECT success FROM flyway_schema_history WHERE version = '2'")) {
                 assertThat(result.next()).isTrue(); assertThat(result.getBoolean(1)).isTrue();
             }
             assertThatThrownBy(() -> statement.executeUpdate("INSERT INTO oauth_identities(provider,provider_id,user_id) VALUES ('google','first-" + userId + "','" + userId + "')"))

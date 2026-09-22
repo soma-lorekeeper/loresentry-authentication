@@ -24,7 +24,7 @@ class OAuthStateStoreTest extends DatabaseTestSupport {
     private final SecureRandom random = new SecureRandom();
     private OAuthStateStore.State state() {
         var now = Instant.now().truncatedTo(java.time.temporal.ChronoUnit.SECONDS);
-        return new OAuthStateStore.State(1, "google", "client", "https://api.loresentry.com/auth/callback/google",
+        return new OAuthStateStore.State(1, "google", "client", "https://api.loresentry.com/auth/oauth/google/callback",
             OAuthSecrets.generate(random), OAuthSecrets.generate(random), OAuthSecrets.generate(random), now, now.plusSeconds(300));
     }
     @Test void jsonRoundTripRejectsMissingUnknownAndMalformedFields() {

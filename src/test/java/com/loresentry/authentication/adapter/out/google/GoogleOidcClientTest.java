@@ -13,7 +13,7 @@ import java.util.*;
 import static org.assertj.core.api.Assertions.*;
 
 class GoogleOidcClientTest {
-    final GoogleSettings settings = GoogleSettings.validated("test-client", "test-only-secret", "https://api.loresentry.com/auth/callback/google", false);
+    final GoogleSettings settings = GoogleSettings.validated("test-client", "test-only-secret", "https://api.loresentry.com/auth/oauth/google/callback", false);
     OAuthStateStore.State state() {
         var random = new SecureRandom(); var now = Instant.now();
         return new OAuthStateStore.State(1, "google", settings.clientId(), settings.redirectUri(), OAuthSecrets.generate(random),
@@ -63,9 +63,9 @@ class GoogleOidcClientTest {
         }
     }
     @Test void invalidConfigurationFailsStartupAndHttpRequiresLocalLoopback() {
-        for (var uri : List.of("https://evil.example/callback", "http://api.loresentry.com/auth/callback/google", "http://localhost/callback", "bad"))
+        for (var uri : List.of("https://api.loresentry.com/auth/callback/google", "https://evil.example/callback", "http://api.loresentry.com/auth/oauth/google/callback", "http://localhost/callback", "bad"))
             assertThatThrownBy(() -> GoogleSettings.validated("id", "secret", uri, false)).hasMessage("Invalid Google OAuth configuration");
-        assertThat(GoogleSettings.validated("id", "secret", "http://localhost:3000/auth/callback/google", true)).isNotNull();
+        assertThat(GoogleSettings.validated("id", "secret", "http://localhost:3000/auth/oauth/google/callback", true)).isNotNull();
         assertThatThrownBy(() -> GoogleSettings.validated("id", "secret", "http://evil.example/callback", true)).isInstanceOf(IllegalStateException.class);
         new ApplicationContextRunner().withUserConfiguration(GoogleConfiguration.class, CoreConfiguration.class)
             .run(context -> assertThat(context).hasFailed());

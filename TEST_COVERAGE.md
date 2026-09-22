@@ -1,14 +1,15 @@
 # Auth verification record
 
-The complete build passed on 2026-09-17: **81 tests, 0 failures, 0 errors and
-0 skipped tests**. This record covers the implementation of LOREKEEPER-506.
+The complete build passed on 2026-09-22: **129 tests, 0 failures, 0 errors and
+0 skipped tests**. This run covers LOREKEEPER-506 after rebasing onto the Flyway
+schema in `main` and adding the V2 transition to the current account model.
 The design source is the Loresentry docs repository's
 `auth/implementation/TEST_PLAN.md`; the table below connects every planned area
 to executable tests in this repository.
 
 ## Evidence
 
-Tests use Java 21, Spring Boot 4.1.1, disposable PostgreSQL 17 and Redis 7.4
+Tests use Java 21, Spring Boot 4.1.1, disposable PostgreSQL 18.4 and Redis 7.4
 containers, and a controlled Google HTTP/JWK server. Real HTTP requests reach the
 Spring application in the lifecycle and failure regression tests. Fault injection
 uses spies around production adapters so actual DB/Redis state can be compared
@@ -16,6 +17,7 @@ with the returned error. RSA keys are generated inside the test process.
 
 | Planned verification | Executable evidence |
 | --- | --- |
+| Fresh V1-to-V2 migration, empty deployed V1 upgrade, unchanged V1 checksum and repeat startup | [MigrationTest](src/test/java/com/loresentry/authentication/db/MigrationTest.java) |
 | Core isolation, fixed Clock and fake ports | [PortContractTest](src/test/java/com/loresentry/authentication/PortContractTest.java), [AccountServiceTest](src/test/java/com/loresentry/authentication/AccountServiceTest.java), [LoginServiceTest](src/test/java/com/loresentry/authentication/LoginServiceTest.java), [RefreshServiceTest](src/test/java/com/loresentry/authentication/RefreshServiceTest.java), [RevokeServiceTest](src/test/java/com/loresentry/authentication/RevokeServiceTest.java) |
 | PostgreSQL/Redis adapter behavior and disposable infrastructure | [InfrastructureTest](src/test/java/com/loresentry/authentication/InfrastructureTest.java), [AccountSchemaTest](src/test/java/com/loresentry/authentication/AccountSchemaTest.java), [OAuthStateStoreTest](src/test/java/com/loresentry/authentication/adapter/out/redis/OAuthStateStoreTest.java), [RefreshStoreTest](src/test/java/com/loresentry/authentication/adapter/out/redis/RefreshStoreTest.java) |
 | Google and JWT adapter success/failure contracts | [GoogleOidcClientTest](src/test/java/com/loresentry/authentication/adapter/out/google/GoogleOidcClientTest.java), [JwtKeysTest](src/test/java/com/loresentry/authentication/JwtKeysTest.java), [JwtTokensTest](src/test/java/com/loresentry/authentication/JwtTokensTest.java) |
@@ -50,10 +52,10 @@ account. Callback PKCE and nonce failures leave no account behind.
 With Java 21 and Docker available:
 
 ```bash
-./gradlew build --no-daemon --max-workers=2
+./gradlew --no-daemon build
 ```
 
-This run used the same command in `eclipse-temurin:21-jdk-alpine` on the Linux
+This run used the command above in `eclipse-temurin:21-jdk-alpine` on the Linux
 host, with its Docker socket mounted for Testcontainers. To reproduce without a
 host JDK, run from the repository root:
 

@@ -8,7 +8,7 @@ public record GoogleSettings(String clientId, String clientSecret, String redire
             if (id == null || id.isBlank() || secret == null || secret.isBlank()) throw new IllegalArgumentException();
             URI uri = URI.create(redirect);
             boolean loopback = "localhost".equals(uri.getHost()) || "127.0.0.1".equals(uri.getHost()) || "[::1]".equals(uri.getHost());
-            boolean production = "https://api.loresentry.com/auth/callback/google".equals(redirect);
+            boolean production = "https://api.loresentry.com/auth/oauth/google/callback".equals(redirect);
             boolean development = local && loopback && ("http".equals(uri.getScheme()) || "https".equals(uri.getScheme()))
                 && uri.getUserInfo() == null && uri.getFragment() == null && uri.getQuery() == null && uri.getPath().startsWith("/");
             if (!production && !development) throw new IllegalArgumentException();
