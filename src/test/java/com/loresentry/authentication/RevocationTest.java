@@ -25,8 +25,8 @@ class RevocationTest extends DatabaseTestSupport {
     @Test
     void repeatRevocationPreservesOtherDeviceAndRejectsAt() {
         var user = UUID.randomUUID();
-        var one = jwt.issue(user);
-        var two = jwt.issue(user);
+        var one = jwt.issue(user, UUID.randomUUID());
+        var two = jwt.issue(user, UUID.randomUUID());
         store.save(one.refreshJti(), user, one.tokens().refreshExpiresAt());
         store.save(two.refreshJti(), user, two.tokens().refreshExpiresAt());
         revoke.revoke(one.tokens().refreshToken());

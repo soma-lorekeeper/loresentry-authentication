@@ -18,19 +18,21 @@ public interface JwtTokens {
      * 검증된 RT의 사용자, 토큰 식별자와 만료 시각이다.
      *
      * @param userId RT의 subject에서 확인한 사용자 식별자
+     * @param sid 로그인 세션의 UUID v4 식별자
      * @param jti RT의 고유 식별자
      * @param expiresAt RT 클레임의 만료 시각
      */
-    record RefreshClaims(UUID userId, UUID jti, Instant expiresAt) {}
+    record RefreshClaims(UUID userId, UUID sid, UUID jti, Instant expiresAt) {}
 
     /**
      * 사용자의 새 AT·RT를 생성한다.
      *
      * @param userId null이 아닌 서비스 사용자 식별자
+     * @param sid 로그인 동안 유지할 UUID v4 세션 식별자
      * @return 토큰 쌍과 RT의 jti. RT 저장소 등록은 호출자가 수행해야 함
      * @throws PortFailure 토큰 서명에 실패한 경우
      */
-    Issued issue(UUID userId);
+    Issued issue(UUID userId, UUID sid);
 
     /**
      * RT의 서명과 클레임을 검증한다.

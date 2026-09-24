@@ -33,7 +33,9 @@ class RevokeServiceTest {
 
     void valid(Instant exp) {
         when(jwt.verifyRefresh("rt", true))
-                .thenReturn(new JwtTokens.RefreshClaims(UUID.randomUUID(), jti, exp));
+                .thenReturn(
+                        new JwtTokens.RefreshClaims(
+                                UUID.randomUUID(), UUID.randomUUID(), jti, exp));
     }
 
     PortFailure temporary() {

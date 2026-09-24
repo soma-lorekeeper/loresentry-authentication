@@ -45,7 +45,8 @@ class LoginServiceTest {
         when(states.consume(id)).thenReturn(Optional.of(state));
         when(provider.exchange("code", state)).thenReturn(identity);
         when(accounts.register(identity)).thenReturn(user);
-        when(jwt.issue(user.id())).thenReturn(new JwtTokens.Issued(tokens, jti));
+        when(jwt.issue(eq(user.id()), any(UUID.class)))
+                .thenReturn(new JwtTokens.Issued(tokens, jti));
         return new LoginService(
                 new OAuthRequests(states, provider, Clock.fixed(now, ZoneOffset.UTC), random),
                 provider,
@@ -69,7 +70,7 @@ class LoginServiceTest {
         order.verify(states).consume(id);
         order.verify(provider).exchange("code", state);
         order.verify(accounts).register(identity);
-        order.verify(jwt).issue(user.id());
+        order.verify(jwt).issue(eq(user.id()), any(UUID.class));
         order.verify(refresh).save(jti, user.id(), tokens.refreshExpiresAt());
     }
 

@@ -21,8 +21,11 @@ public final class RsaJwtTokens implements JwtTokens {
     private final JwtKeys keys;
     private final Clock clock;
 
-    public Issued issue(UUID userId) {
+    public Issued issue(UUID userId, UUID sid) {
         Objects.requireNonNull(userId);
+        Objects.requireNonNull(sid);
+        if (sid.version() != 4 || sid.variant() != 2)
+            throw new IllegalArgumentException("Invalid session id");
         var issuedAt = clock.instant().truncatedTo(ChronoUnit.SECONDS);
         var accessExpiry = issuedAt.plus(Duration.ofMinutes(15));
         var refreshExpiry = issuedAt.plus(Duration.ofDays(14));
@@ -31,13 +34,21 @@ public final class RsaJwtTokens implements JwtTokens {
             var access =
                     sign(
                             userId,
+                            sid,
                             UUID.randomUUID(),
                             issuedAt,
                             accessExpiry,
                             "access",
                             "loresentry-api");
             var refresh =
-                    sign(userId, refreshId, issuedAt, refreshExpiry, "refresh", "loresentry-auth");
+                    sign(
+                            userId,
+                            sid,
+                            refreshId,
+                            issuedAt,
+                            refreshExpiry,
+                            "refresh",
+                            "loresentry-auth");
             return new Issued(
                     new TokenPair(access, accessExpiry, refresh, refreshExpiry), refreshId);
         } catch (JOSEException failure) {
@@ -47,7 +58,13 @@ public final class RsaJwtTokens implements JwtTokens {
     }
 
     private String sign(
-            UUID userId, UUID jti, Instant issuedAt, Instant expiry, String type, String audience)
+            UUID userId,
+            UUID sid,
+            UUID jti,
+            Instant issuedAt,
+            Instant expiry,
+            String type,
+            String audience)
             throws JOSEException {
         var claims =
                 new JWTClaimsSet.Builder()
@@ -57,6 +74,7 @@ public final class RsaJwtTokens implements JwtTokens {
                         .issueTime(Date.from(issuedAt))
                         .expirationTime(Date.from(expiry))
                         .jwtID(jti.toString())
+                        .claim("sid", sid.toString())
                         .claim("token_type", type)
                         .build();
         var token =
@@ -85,6 +103,8 @@ public final class RsaJwtTokens implements JwtTokens {
                 throw new IllegalArgumentException();
             var userId = uuid(claims.getSubject());
             var jti = uuid(claims.getJWTID());
+            var sid = uuid(claims.getStringClaim("sid"));
+            if (sid.version() != 4 || sid.variant() != 2) throw new IllegalArgumentException();
             var issuedAt = Objects.requireNonNull(claims.getIssueTime()).toInstant();
             var expiry = Objects.requireNonNull(claims.getExpirationTime()).toInstant();
             var now = clock.instant();
@@ -92,7 +112,7 @@ public final class RsaJwtTokens implements JwtTokens {
                     || issuedAt.isAfter(now.plusSeconds(30))
                     || (!allowExpired && !now.isBefore(expiry.plusSeconds(30))))
                 throw new IllegalArgumentException();
-            return new RefreshClaims(userId, jti, expiry);
+            return new RefreshClaims(userId, sid, jti, expiry);
         } catch (Exception failure) {
             throw new PortFailure(
                     PortFailure.Kind.INVALID_TOKEN, PortFailure.Execution.NOT_EXECUTED, false);

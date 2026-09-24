@@ -23,10 +23,14 @@ class JwtTokensTest {
     void issuedPairHasIndependentIdsCorrectLifetimesAndAnIndependentRsaSignature()
             throws Exception {
         var userId = UUID.randomUUID();
-        var issued = tokens.issue(userId);
+        var sid = UUID.randomUUID();
+        var issued = tokens.issue(userId, sid);
         var pair = issued.tokens();
         var at = SignedJWT.parse(pair.accessToken());
         var rt = SignedJWT.parse(pair.refreshToken());
+        assertThat(at.getJWTClaimsSet().getStringClaim("sid")).isEqualTo(sid.toString());
+        assertThat(rt.getJWTClaimsSet().getStringClaim("sid")).isEqualTo(sid.toString());
+        assertThat(tokens.verifyRefresh(pair.refreshToken(), false).sid()).isEqualTo(sid);
         assertThat(pair.accessExpiresAt()).isEqualTo(NOW.plusSeconds(900));
         assertThat(pair.refreshExpiresAt()).isEqualTo(NOW.plus(Duration.ofDays(14)));
         assertThat(at.getJWTClaimsSet().getAudience()).containsExactly("loresentry-api");
@@ -44,7 +48,7 @@ class JwtTokensTest {
 
     @Test
     void rejectsMissingWrongAndMalformedRequiredClaims() throws Exception {
-        for (var name : List.of("sub", "iss", "aud", "iat", "exp", "jti", "token_type")) {
+        for (var name : List.of("sub", "iss", "aud", "iat", "exp", "jti", "sid", "token_type")) {
             var claims = validClaims();
             claims.remove(name);
             reject(sign(claims, TestKeys.KID, JWSAlgorithm.RS256));
@@ -58,6 +62,8 @@ class JwtTokensTest {
                                 "aud",
                                 List.of("loresentry-api"),
                                 "jti",
+                                "invalid",
+                                "sid",
                                 "invalid",
                                 "token_type",
                                 "access")
@@ -100,7 +106,7 @@ class JwtTokensTest {
 
     @Test
     void replacedKeyRejectsPreviouslyIssuedTokensEvenWithReusedKid() throws Exception {
-        var old = tokens.issue(UUID.randomUUID()).tokens().refreshToken();
+        var old = tokens.issue(UUID.randomUUID(), UUID.randomUUID()).tokens().refreshToken();
         var pair = TestKeys.generate(2048);
         var replacement =
                 JwtKeys.load(
@@ -117,6 +123,29 @@ class JwtTokensTest {
         assertThatThrownBy(() -> sameKid.verifyRefresh(old, true)).isInstanceOf(PortFailure.class);
     }
 
+    @Test
+    void rejectsNonV4SessionsAndTamperedSignatures() throws Exception {
+        for (var sid :
+                List.of(
+                        "0195a860-0000-7000-8000-000000000001",
+                        "1-1-4-8-1",
+                        "00000000-0000-4000-0000-000000000001")) {
+            var claims = validClaims();
+            claims.put("sid", sid);
+            reject(sign(claims, TestKeys.KID, JWSAlgorithm.RS256));
+        }
+        var token = tokens.issue(UUID.randomUUID(), UUID.randomUUID()).tokens().refreshToken();
+        var parts = token.split("\\.");
+        var signature = Base64.getUrlDecoder().decode(parts[2]);
+        signature[0] ^= 1;
+        reject(
+                parts[0]
+                        + "."
+                        + parts[1]
+                        + "."
+                        + Base64.getUrlEncoder().withoutPadding().encodeToString(signature));
+    }
+
     private Map<String, Object> validClaims() {
         return new HashMap<>(
                 Map.of(
@@ -131,6 +160,8 @@ class JwtTokensTest {
                         "exp",
                         NOW.plusSeconds(60).getEpochSecond(),
                         "jti",
+                        UUID.randomUUID().toString(),
+                        "sid",
                         UUID.randomUUID().toString(),
                         "token_type",
                         "refresh"));

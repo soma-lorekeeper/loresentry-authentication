@@ -45,7 +45,7 @@ public final class LoginService implements LoginUseCase {
             var identity = oidcClient.exchange(command.code(), loginState);
             // Account registration returns only after the DB transaction commits.
             var user = accountRegistration.register(identity);
-            var issuedTokens = jwtTokens.issue(user.id());
+            var issuedTokens = jwtTokens.issue(user.id(), java.util.UUID.randomUUID());
             refreshTokenStore.save(
                     issuedTokens.refreshJti(), user.id(), issuedTokens.tokens().refreshExpiresAt());
             return new LoginResult(issuedTokens.tokens(), CONSUMED);

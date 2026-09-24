@@ -15,6 +15,7 @@ class RefreshServiceTest {
     final JwtTokens jwt = mock(JwtTokens.class);
     final RefreshTokenStore store = mock(RefreshTokenStore.class);
     final RefreshService service = new RefreshService(jwt, store);
+    final UUID sid = UUID.randomUUID();
     final UUID user = UUID.randomUUID(), jti = UUID.randomUUID(), newJti = UUID.randomUUID();
     final TokenPair tokens =
             new TokenPair(
@@ -22,7 +23,9 @@ class RefreshServiceTest {
 
     void valid() {
         when(jwt.verifyRefresh("old", false))
-                .thenReturn(new JwtTokens.RefreshClaims(user, jti, Instant.now().plusSeconds(300)));
+                .thenReturn(
+                        new JwtTokens.RefreshClaims(
+                                user, sid, jti, Instant.now().plusSeconds(300)));
     }
 
     @Test
@@ -39,7 +42,7 @@ class RefreshServiceTest {
         when(store.consume(jti)).thenReturn(Optional.empty(), Optional.of(UUID.randomUUID()));
         failure(() -> service.refresh("old"), REFRESH_REJECTED);
         failure(() -> service.refresh("old"), REFRESH_REJECTED);
-        verify(jwt, never()).issue(any());
+        verify(jwt, never()).issue(any(), any());
     }
 
     @Test
@@ -64,12 +67,12 @@ class RefreshServiceTest {
     void returnsOnlyAfterSaveAndDoesNotReturnOnSaveFailure() {
         valid();
         when(store.consume(jti)).thenReturn(Optional.of(user));
-        when(jwt.issue(user)).thenReturn(new JwtTokens.Issued(tokens, newJti));
+        when(jwt.issue(user, sid)).thenReturn(new JwtTokens.Issued(tokens, newJti));
         assertThat(service.refresh("old")).isEqualTo(tokens);
         var order = inOrder(jwt, store);
         order.verify(jwt).verifyRefresh("old", false);
         order.verify(store).consume(jti);
-        order.verify(jwt).issue(user);
+        order.verify(jwt).issue(user, sid);
         order.verify(store).save(newJti, user, tokens.refreshExpiresAt());
         doThrow(new PortFailure(PortFailure.Kind.UNAVAILABLE, PortFailure.Execution.UNKNOWN, true))
                 .when(store)

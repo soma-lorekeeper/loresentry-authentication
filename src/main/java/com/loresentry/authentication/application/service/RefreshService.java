@@ -36,7 +36,7 @@ public final class RefreshService implements RefreshUseCase {
                             : REFRESH_OUTCOME_UNKNOWN);
         }
         try {
-            var issued = jwt.issue(claims.userId());
+            var issued = jwt.issue(claims.userId(), claims.sid());
             store.save(issued.refreshJti(), claims.userId(), issued.tokens().refreshExpiresAt());
             return issued.tokens();
         } catch (PortFailure e) {

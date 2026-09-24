@@ -26,8 +26,8 @@ class RefreshRotationTest extends DatabaseTestSupport {
     @Test
     void concurrentRotationHasOneWinnerAndDoesNotAffectAnotherDevice() throws Exception {
         UUID user = UUID.randomUUID();
-        var first = jwt.issue(user);
-        var second = jwt.issue(user);
+        var first = jwt.issue(user, UUID.randomUUID());
+        var second = jwt.issue(user, UUID.randomUUID());
         store.save(first.refreshJti(), user, first.tokens().refreshExpiresAt());
         store.save(second.refreshJti(), user, second.tokens().refreshExpiresAt());
         var gate = new CountDownLatch(1);
@@ -64,7 +64,7 @@ class RefreshRotationTest extends DatabaseTestSupport {
         var user = UUID.randomUUID();
         var now = Instant.now().truncatedTo(java.time.temporal.ChronoUnit.SECONDS);
         var oldJwt = new RsaJwtTokens(keys, Clock.fixed(now.minusSeconds(86400), ZoneOffset.UTC));
-        var old = oldJwt.issue(user);
+        var old = oldJwt.issue(user, UUID.randomUUID());
         store.save(old.refreshJti(), user, old.tokens().refreshExpiresAt());
         var fixedJwt = new RsaJwtTokens(keys, Clock.fixed(now, ZoneOffset.UTC));
         var fresh = new RefreshService(fixedJwt, store).refresh(old.tokens().refreshToken());
