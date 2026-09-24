@@ -5,8 +5,9 @@ Authentication service for Lore Sentry.
 Handles the Google-based sign-in flow, user account and display name data, and
 authentication session/token logic used by the Gateway/BFF.
 
-See the [code reading guide](docs/code-guide.md) for package responsibilities,
-the login request flow, and startup configuration.
+See the [documentation index](docs/README.md) for Auth contracts, implementation
+and verification, and the [code reading guide](docs/code-guide.md) for package
+responsibilities, the login request flow and startup configuration.
 
 Reached only through `loresentry-gateway` — this service is `ClusterIP` and has
 no route from outside the cluster.
@@ -56,8 +57,8 @@ header, so the deployment must keep this service unreachable from the internet.
 Request and response fields use snake case. Errors contain `code`, `message` and
 `next_action`. Only callback responses include `login_request_consumed`; a null
 value means that consumption could not be confirmed. Token responses use
-`Cache-Control: no-store`. The API contract is maintained in the Loresentry docs
-repository at `auth/INTERNAL_API.md`.
+`Cache-Control: no-store`. The API contract is maintained in this repository at
+[docs/INTERNAL_API.md](docs/INTERNAL_API.md).
 
 Web request and response DTOs are Java records in `adapter.in.web.dto`. Jackson
 maps their JSON field names, and Bean Validation checks required values and the
@@ -90,8 +91,9 @@ login cannot revoke the new session. Login and refresh commands are never retrie
 `SessionStore` is implemented by `RedisSessionStore` using `redis/session.lua`.
 Old `auth:refresh:*` keys are not read, and sidless tokens require login again.
 Auth implementation and tests are complete; BFF session checks and coordinated
-production rollout remain separate work. The shared contract and rollout steps
-are in the docs repository at `auth/implementation/SESSION_HANDOFF.md`.
+production rollout remain separate work. The [session contract](docs/token/SINGLE_SESSION_DESIGN.md) is maintained here;
+coordinated rollout steps remain in the shared
+[handoff document](../docs/auth/implementation/SESSION_HANDOFF.md).
 
 ## Schema
 
