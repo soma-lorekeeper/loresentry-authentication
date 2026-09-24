@@ -97,6 +97,19 @@ class RevokeServiceTest {
     }
 
     @Test
+    void tokenExpiringDuringBackoffNeverStartsAnotherDelete() {
+        valid(now.plusSeconds(1));
+        var clock = mock(Clock.class);
+        when(clock.instant()).thenAnswer(call -> now.plusNanos(elapsed.get()));
+        doThrow(temporary()).when(store).revoke(user, sid, now.plusSeconds(1));
+        var service =
+                new RevokeService(
+                        jwt, store, clock, elapsed::get, millis -> elapsed.set(1_000_000_000L));
+        service.revoke("rt");
+        verify(store, times(1)).revoke(user, sid, now.plusSeconds(1));
+    }
+
+    @Test
     void expiredValidTokenIsSuccessButInvalidSignatureStillFails() {
         valid(now);
         service().revoke("rt");

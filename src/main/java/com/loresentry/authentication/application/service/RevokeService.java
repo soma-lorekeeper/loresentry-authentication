@@ -66,6 +66,7 @@ public final class RevokeService implements RevokeUseCase {
             // Reserve the complete port deadline; never start an attempt that can exceed the total
             // budget.
             if (nanos.getAsLong() - started > 1_500_000_000L) break;
+            if (!clock.instant().isBefore(claims.expiresAt())) return;
             try {
                 store.revoke(claims.userId(), claims.sid(), claims.expiresAt());
                 return;

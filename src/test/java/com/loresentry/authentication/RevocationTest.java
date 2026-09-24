@@ -21,6 +21,9 @@ class RevocationTest extends DatabaseTestSupport {
     @Autowired JwtTokens jwt;
     @Autowired SessionStore store;
     @Autowired RevokeUseCase revoke;
+    @Autowired RefreshUseCase refresh;
+    @Autowired StringRedisTemplate redis;
+    @Autowired com.loresentry.authentication.adapter.out.jwt.JwtKeys keys;
 
     @Test
     void repeatRevocationPreservesNewSessionAndRejectsAt() {
@@ -54,6 +57,78 @@ class RevocationTest extends DatabaseTestSupport {
                         e ->
                                 assertThat(e.reason())
                                         .isEqualTo(AuthFailure.Reason.INVALID_REFRESH_TOKEN));
+    }
+
+    @Test
+    void rotatedButUnexpiredRefreshTokenRevokesTheSameSession() {
+        var user = UUID.randomUUID();
+        var sid = UUID.randomUUID();
+        var old = jwt.issue(user, sid);
+        store.replace(
+                user,
+                new SessionStore.Session(sid, old.refreshJti(), old.tokens().refreshExpiresAt()));
+        var rotated = refresh.refresh(old.tokens().refreshToken());
+        assertThat(jwt.verifyRefresh(rotated.refreshToken(), false).jti())
+                .isNotEqualTo(old.refreshJti());
+        revoke.revoke(old.tokens().refreshToken());
+        assertThat(redis.hasKey("auth:session:" + user)).isFalse();
+        revoke.revoke(old.tokens().refreshToken());
+    }
+
+    @Test
+    void expiredRefreshTokenCannotRevokeRenewedSession() {
+        var user = UUID.randomUUID();
+        var sid = UUID.randomUUID();
+        var oldJwt =
+                new com.loresentry.authentication.adapter.out.jwt.RsaJwtTokens(
+                        keys, Clock.offset(Clock.systemUTC(), Duration.ofDays(-15)));
+        var old = oldJwt.issue(user, sid);
+        var current = jwt.issue(user, sid);
+        store.replace(
+                user,
+                new SessionStore.Session(
+                        sid, current.refreshJti(), current.tokens().refreshExpiresAt()));
+        var before = redis.opsForValue().get("auth:session:" + user);
+        revoke.revoke(old.tokens().refreshToken());
+        assertThat(redis.opsForValue().get("auth:session:" + user)).isEqualTo(before);
+    }
+
+    @Test
+    void retryAfterLostDeleteResponseCannotDeleteANewLogin() {
+        var user = UUID.randomUUID();
+        var sid = UUID.randomUUID();
+        var old = jwt.issue(user, sid);
+        var claims = jwt.verifyRefresh(old.tokens().refreshToken(), false);
+        var newer =
+                new SessionStore.Session(UUID.randomUUID(), UUID.randomUUID(), claims.expiresAt());
+        store.replace(user, new SessionStore.Session(sid, claims.jti(), claims.expiresAt()));
+        var proxy = mock(SessionStore.class);
+        var calls = new java.util.concurrent.atomic.AtomicInteger();
+        doAnswer(
+                        call -> {
+                            store.revoke(user, sid, claims.expiresAt());
+                            if (calls.getAndIncrement() == 0) {
+                                store.replace(user, newer);
+                                throw new PortFailure(
+                                        PortFailure.Kind.UNAVAILABLE,
+                                        PortFailure.Execution.UNKNOWN,
+                                        true);
+                            }
+                            return null;
+                        })
+                .when(proxy)
+                .revoke(user, sid, claims.expiresAt());
+        new com.loresentry.authentication.application.service.RevokeService(
+                        jwt, proxy, Clock.systemUTC(), () -> 0L, millis -> {})
+                .revoke(old.tokens().refreshToken());
+        assertThat(calls.get()).isEqualTo(2);
+        assertThat(
+                        store.rotate(
+                                user,
+                                newer,
+                                new SessionStore.Session(
+                                        newer.sid(), UUID.randomUUID(), newer.refreshExpiresAt())))
+                .isTrue();
     }
 
     @Test
