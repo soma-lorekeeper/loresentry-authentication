@@ -166,13 +166,13 @@ class AuthControllerTest {
                         jsonPath("$.login_request_consumed")
                                 .value(org.hamcrest.Matchers.nullValue()));
         when(refresh.refresh("rt"))
-                .thenThrow(new AuthFailure(AuthFailure.Reason.REFRESH_SAVE_FAILED));
+                .thenThrow(new AuthFailure(AuthFailure.Reason.REFRESH_OUTCOME_UNKNOWN));
         mvc.perform(
                         post("/auth/tokens/refresh")
                                 .contentType("application/json")
                                 .content("{\"refresh_token\":\"rt\"}"))
                 .andExpect(status().isServiceUnavailable())
-                .andExpect(jsonPath("$.code").value("REFRESH_SAVE_FAILED"))
+                .andExpect(jsonPath("$.code").value("REFRESH_OUTCOME_UNKNOWN"))
                 .andExpect(jsonPath("$.next_action").value("RELOGIN"))
                 .andExpect(jsonPath("$.login_request_consumed").doesNotExist());
     }

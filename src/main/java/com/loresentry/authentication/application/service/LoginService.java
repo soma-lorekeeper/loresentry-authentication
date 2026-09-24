@@ -46,7 +46,7 @@ public final class LoginService implements LoginUseCase {
             // Account registration returns only after the DB transaction commits.
             var user = accountRegistration.register(identity);
             var sid = java.util.UUID.randomUUID();
-            var issuedTokens = jwtTokens.issue(user.id(), sid);
+            var issuedTokens = issueTokens(user.id(), sid);
             sessions.replace(
                     user.id(),
                     new SessionStore.Session(
@@ -56,14 +56,24 @@ public final class LoginService implements LoginUseCase {
             return new LoginResult(issuedTokens.tokens(), CONSUMED);
         } catch (PortFailure failure) {
             var reason =
-                    failure.kind() == PortFailure.Kind.INVALID_IDENTITY
-                            ? OAUTH_IDENTITY_INVALID
-                            : LOGIN_UNAVAILABLE;
+                    switch (failure.kind()) {
+                        case INVALID_IDENTITY -> OAUTH_IDENTITY_INVALID;
+                        case INVALID_DATA -> INTERNAL_ERROR;
+                        default -> LOGIN_UNAVAILABLE;
+                    };
             throw new AuthFailure(reason, CONSUMED);
         } catch (AuthFailure failure) {
             throw new AuthFailure(failure.reason(), CONSUMED);
         } catch (RuntimeException failure) {
             throw new AuthFailure(INTERNAL_ERROR, CONSUMED, failure);
+        }
+    }
+
+    private JwtTokens.Issued issueTokens(java.util.UUID userId, java.util.UUID sid) {
+        try {
+            return jwtTokens.issue(userId, sid);
+        } catch (RuntimeException failure) {
+            throw new AuthFailure(INTERNAL_ERROR);
         }
     }
 

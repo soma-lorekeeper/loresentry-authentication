@@ -30,8 +30,6 @@ public final class ErrorResponses {
                     new Contract(503, "Refresh is temporarily unavailable.", "RETRY_LATER");
             case REFRESH_OUTCOME_UNKNOWN ->
                     new Contract(503, "Refresh outcome could not be confirmed.", "RELOGIN");
-            case REFRESH_SAVE_FAILED ->
-                    new Contract(503, "New refresh state could not be confirmed.", "RELOGIN");
             case REVOCATION_UNCONFIRMED ->
                     new Contract(503, "Revocation could not be confirmed.", "NONE");
             case ACCOUNT_UNAVAILABLE ->

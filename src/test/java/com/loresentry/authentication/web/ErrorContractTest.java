@@ -56,7 +56,6 @@ class ErrorContractTest {
                         entry("LOGIN_UNAVAILABLE", "503 RESTART_LOGIN"),
                         entry("REFRESH_UNAVAILABLE", "503 RETRY_LATER"),
                         entry("REFRESH_OUTCOME_UNKNOWN", "503 RELOGIN"),
-                        entry("REFRESH_SAVE_FAILED", "503 RELOGIN"),
                         entry("REVOCATION_UNCONFIRMED", "503 NONE"),
                         entry("ACCOUNT_UNAVAILABLE", "503 RETRY_LATER"),
                         entry("INTERNAL_ERROR", "500 NONE"));

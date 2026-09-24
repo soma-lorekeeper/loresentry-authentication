@@ -17,7 +17,6 @@ public class AuthFailure extends RuntimeException {
         LOGIN_UNAVAILABLE,
         REFRESH_UNAVAILABLE,
         REFRESH_OUTCOME_UNKNOWN,
-        REFRESH_SAVE_FAILED,
         REVOCATION_UNCONFIRMED,
         ACCOUNT_UNAVAILABLE,
         INTERNAL_ERROR

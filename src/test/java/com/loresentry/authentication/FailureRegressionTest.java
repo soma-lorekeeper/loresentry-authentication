@@ -22,6 +22,7 @@ import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
 @Import(HttpAuthTestSupport.GoogleHttpConfiguration.class)
 class FailureRegressionTest extends HttpAuthTestSupport {
     @MockitoSpyBean RedisOAuthStateStore stateAdapter;
+    @MockitoSpyBean JwtTokens jwtAdapter;
     @MockitoSpyBean RedisSessionStore tokenAdapter;
     @MockitoSpyBean JpaAccountStore accountAdapter;
     @Autowired StringRedisTemplate redis;
@@ -129,6 +130,66 @@ class FailureRegressionTest extends HttpAuthTestSupport {
         verify(tokenAdapter, times(2)).rotate(eq(claims.userId()), any(), any());
         reset(tokenAdapter);
         error(refresh(token), 401, "REFRESH_REJECTED", "RELOGIN");
+    }
+
+    @Test
+    @org.junit.jupiter.api.extension.ExtendWith(
+            org.springframework.boot.test.system.OutputCaptureExtension.class)
+    void signingAndCorruptStateFailuresAreInternalAndNeverExposeSecrets(
+            org.springframework.boot.test.system.CapturedOutput output) {
+        var subject = "internal-" + UUID.randomUUID();
+        var initial = login(subject);
+        var claims = jwt.verifyRefresh(rt(initial), false);
+        var key = "auth:session:" + claims.userId();
+        var before = redis.opsForValue().get(key);
+        doThrow(
+                        new PortFailure(
+                                PortFailure.Kind.UNAVAILABLE,
+                                PortFailure.Execution.NOT_EXECUTED,
+                                false))
+                .when(jwtAdapter)
+                .issue(any(), any());
+        var failedLogin = callback(pending(subject));
+        error(failedLogin, 500, "INTERNAL_ERROR", "NONE");
+        assertThat(failedLogin.body().get("login_request_consumed").booleanValue()).isTrue();
+        error(refresh(rt(initial)), 500, "INTERNAL_ERROR", "NONE");
+        assertThat(redis.opsForValue().get(key)).isEqualTo(before);
+        reset(jwtAdapter);
+        redis.opsForValue().set(key, "corrupt-session-secret");
+        error(refresh(rt(initial)), 500, "INTERNAL_ERROR", "NONE");
+        error(
+                call("POST", "/auth/tokens/revoke", Map.of("refresh_token", rt(initial)), null),
+                500,
+                "INTERNAL_ERROR",
+                "NONE");
+        verify(tokenAdapter, times(1)).revoke(claims.userId(), claims.sid(), claims.expiresAt());
+        assertThat(redis.opsForValue().get(key)).isEqualTo("corrupt-session-secret");
+        assertThat(output.getAll())
+                .doesNotContain(
+                        "corrupt-session-secret",
+                        rt(initial),
+                        initial.body().get("access_token").asString());
+    }
+
+    @Test
+    void loginReplacementDistinguishesPortFailureFromUnclassifiedDefect() {
+        for (var execution :
+                List.of(PortFailure.Execution.NOT_EXECUTED, PortFailure.Execution.UNKNOWN)) {
+            var subject = "login-port-" + UUID.randomUUID();
+            doThrow(unavailable(execution)).when(tokenAdapter).replace(any(), any());
+            var result = callback(pending(subject));
+            error(result, 503, "LOGIN_UNAVAILABLE", "RESTART_LOGIN");
+            assertThat(result.body().get("login_request_consumed").booleanValue()).isTrue();
+            assertThat(result.headers().firstValue("Cache-Control")).contains("no-store");
+            reset(tokenAdapter);
+        }
+        doThrow(new IllegalStateException("private-token-detail"))
+                .when(tokenAdapter)
+                .replace(any(), any());
+        var result = callback(pending("login-defect-" + UUID.randomUUID()));
+        error(result, 500, "INTERNAL_ERROR", "NONE");
+        assertThat(result.body().get("login_request_consumed").booleanValue()).isTrue();
+        assertThat(result.body().toString()).doesNotContain("private-token-detail");
     }
 
     @Test

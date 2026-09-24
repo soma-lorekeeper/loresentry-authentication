@@ -71,6 +71,8 @@ public final class RevokeService implements RevokeUseCase {
                 store.revoke(claims.userId(), claims.sid(), claims.expiresAt());
                 return;
             } catch (PortFailure e) {
+                if (e.kind() == PortFailure.Kind.INVALID_DATA)
+                    throw new AuthFailure(INTERNAL_ERROR);
                 if (!e.retryable()) break;
             }
         }
