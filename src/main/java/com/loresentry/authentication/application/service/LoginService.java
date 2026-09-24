@@ -14,13 +14,13 @@ import com.loresentry.authentication.application.port.out.JwtTokens;
 import com.loresentry.authentication.application.port.out.OAuthStateStore;
 import com.loresentry.authentication.application.port.out.OidcClient;
 import com.loresentry.authentication.application.port.out.PortFailure;
-import com.loresentry.authentication.application.port.out.RefreshTokenStore;
+import com.loresentry.authentication.application.port.out.SessionStore;
 import lombok.RequiredArgsConstructor;
 
 /**
  * 로그인 요청 소모, 공급자 신원 검증, 계정 등록과 토큰 발급을 순서대로 연결한다.
  *
- * <p>계정 변경의 DB 커밋 이후 토큰을 발급하고 RT를 저장한다. 이후 실패가 계정 커밋이나 로그인 요청 소모를 되돌리지는 않는다.
+ * <p>계정 변경의 DB 커밋 이후 토큰을 발급하고 활성 세션을 교체한다. 이후 실패가 계정 커밋이나 로그인 요청 소모를 되돌리지는 않는다.
  */
 @RequiredArgsConstructor
 public final class LoginService implements LoginUseCase {
@@ -28,7 +28,7 @@ public final class LoginService implements LoginUseCase {
     private final OidcClient oidcClient;
     private final RegisterIdentityUseCase accountRegistration;
     private final JwtTokens jwtTokens;
-    private final RefreshTokenStore refreshTokenStore;
+    private final SessionStore sessions;
 
     @Override
     public PreparedLogin prepare() {
@@ -45,9 +45,14 @@ public final class LoginService implements LoginUseCase {
             var identity = oidcClient.exchange(command.code(), loginState);
             // Account registration returns only after the DB transaction commits.
             var user = accountRegistration.register(identity);
-            var issuedTokens = jwtTokens.issue(user.id(), java.util.UUID.randomUUID());
-            refreshTokenStore.save(
-                    issuedTokens.refreshJti(), user.id(), issuedTokens.tokens().refreshExpiresAt());
+            var sid = java.util.UUID.randomUUID();
+            var issuedTokens = jwtTokens.issue(user.id(), sid);
+            sessions.replace(
+                    user.id(),
+                    new SessionStore.Session(
+                            sid,
+                            issuedTokens.refreshJti(),
+                            issuedTokens.tokens().refreshExpiresAt()));
             return new LoginResult(issuedTokens.tokens(), CONSUMED);
         } catch (PortFailure failure) {
             var reason =

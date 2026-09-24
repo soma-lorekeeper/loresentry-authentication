@@ -21,12 +21,12 @@ class LoginCommitTest extends DatabaseTestSupport {
     @Autowired RegisterIdentityUseCase accounts;
     @Autowired AccountStore accountStore;
     @Autowired JwtTokens jwt;
-    @Autowired RefreshTokenStore refresh;
+    @Autowired SessionStore refresh;
 
     @Test
     void committedAccountSurvivesRefreshSaveFailureAndReloginUsesSameUuid() {
         var provider = mock(OidcClient.class);
-        var broken = mock(RefreshTokenStore.class);
+        var broken = mock(SessionStore.class);
         var identity =
                 new OidcClient.Identity(
                         "google", "commit-" + UUID.randomUUID(), "Name", "same@example.com");
@@ -47,7 +47,7 @@ class LoginCommitTest extends DatabaseTestSupport {
                                     true);
                         })
                 .when(broken)
-                .save(any(), any(), any());
+                .replace(any(), any());
         var prepared = login.prepare();
         var state = states.find(prepared.loginRequestId()).orElseThrow();
         assertThatThrownBy(

@@ -17,8 +17,8 @@ class LoginServiceTest {
     final OidcClient provider = mock(OidcClient.class);
     final RegisterIdentityUseCase accounts = mock(RegisterIdentityUseCase.class);
     final JwtTokens jwt = mock(JwtTokens.class);
-    final RefreshTokenStore refresh = mock(RefreshTokenStore.class);
-    final Instant now = Instant.now();
+    final SessionStore refresh = mock(SessionStore.class);
+    final Instant now = Instant.now().truncatedTo(java.time.temporal.ChronoUnit.SECONDS);
     final SecureRandom random = new SecureRandom();
     final String id = OAuthSecrets.generate(random);
     final OAuthStateStore.State state =
@@ -70,8 +70,34 @@ class LoginServiceTest {
         order.verify(states).consume(id);
         order.verify(provider).exchange("code", state);
         order.verify(accounts).register(identity);
-        order.verify(jwt).issue(eq(user.id()), any(UUID.class));
-        order.verify(refresh).save(jti, user.id(), tokens.refreshExpiresAt());
+        var sid = org.mockito.ArgumentCaptor.forClass(UUID.class);
+        order.verify(jwt).issue(eq(user.id()), sid.capture());
+        order.verify(refresh)
+                .replace(
+                        user.id(),
+                        new SessionStore.Session(sid.getValue(), jti, tokens.refreshExpiresAt()));
+    }
+
+    @Test
+    void signingFailureDoesNotReplaceExistingSession() {
+        var service = service();
+        doThrow(new IllegalStateException("signing failed")).when(jwt).issue(any(), any());
+        failure(
+                () -> service.callback(command()),
+                AuthFailure.Reason.INTERNAL_ERROR,
+                AuthFailure.Consumption.CONSUMED);
+        verifyNoInteractions(refresh);
+    }
+
+    @Test
+    void everySuccessfulLoginCreatesANewSessionId() {
+        var service = service();
+        service.callback(command());
+        service.callback(command());
+        var sessions = org.mockito.ArgumentCaptor.forClass(SessionStore.Session.class);
+        verify(refresh, times(2)).replace(eq(user.id()), sessions.capture());
+        assertThat(sessions.getAllValues().get(0).sid())
+                .isNotEqualTo(sessions.getAllValues().get(1).sid());
     }
 
     @Test
@@ -115,12 +141,12 @@ class LoginServiceTest {
         doReturn(user).when(accounts).register(identity);
         doThrow(new PortFailure(PortFailure.Kind.UNAVAILABLE, PortFailure.Execution.UNKNOWN, true))
                 .when(refresh)
-                .save(jti, user.id(), tokens.refreshExpiresAt());
+                .replace(eq(user.id()), any(SessionStore.Session.class));
         failure(
                 () -> service.callback(command()),
                 AuthFailure.Reason.LOGIN_UNAVAILABLE,
                 AuthFailure.Consumption.CONSUMED);
-        verify(refresh, times(1)).save(jti, user.id(), tokens.refreshExpiresAt());
+        verify(refresh, times(1)).replace(eq(user.id()), any(SessionStore.Session.class));
     }
 
     @Test

@@ -22,7 +22,7 @@ public class LoginConfiguration {
             OidcClient provider,
             RegisterIdentityUseCase accounts,
             JwtTokens jwt,
-            RefreshTokenStore refresh) {
-        return new LoginService(requests, provider, accounts, jwt, refresh);
+            SessionStore sessions) {
+        return new LoginService(requests, provider, accounts, jwt, sessions);
     }
 }
