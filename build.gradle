@@ -49,6 +49,7 @@ dependencies {
 
 tasks.named('test') {
 	useJUnitPlatform()
+	inputs.property('redisImage', providers.environmentVariable('AUTH_TEST_REDIS_IMAGE').orElse('redis:7.4-alpine'))
 }
 
 spotless {

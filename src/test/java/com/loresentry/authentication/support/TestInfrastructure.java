@@ -18,7 +18,9 @@ public final class TestInfrastructure {
                             Wait.forLogMessage(
                                     ".*database system is ready to accept connections.*\\n", 2));
     private static final GenericContainer<?> REDIS =
-            new GenericContainer<>("redis:7.4-alpine")
+            new GenericContainer<>(
+                            System.getenv()
+                                    .getOrDefault("AUTH_TEST_REDIS_IMAGE", "redis:7.4-alpine"))
                     .withExposedPorts(6379)
                     .waitingFor(Wait.forListeningPort());
 

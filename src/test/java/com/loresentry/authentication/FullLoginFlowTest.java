@@ -25,6 +25,7 @@ import org.springframework.test.util.ReflectionTestUtils;
 @Import(HttpAuthTestSupport.GoogleHttpConfiguration.class)
 class FullLoginFlowTest extends HttpAuthTestSupport {
     @Autowired ApplicationContext context;
+    @Autowired org.springframework.data.redis.core.StringRedisTemplate redis;
 
     @Test
     void productionCoreAndAdaptersAreWiredThroughConfiguration() {
@@ -73,6 +74,11 @@ class FullLoginFlowTest extends HttpAuthTestSupport {
         var firstClaims = jwt.verifyRefresh(rt(first), false);
         var secondClaims = jwt.verifyRefresh(rt(second), false);
         assertThat(secondClaims.sid()).isNotEqualTo(firstClaims.sid());
+        var active = mapper.readTree(redis.opsForValue().get("auth:session:" + user));
+        assertThat(active.get("sid").asString()).isEqualTo(secondClaims.sid().toString());
+        assertThat(access.getJWTClaimsSet().getStringClaim("sid"))
+                .isNotEqualTo(active.get("sid").asString());
+        // This is the shared state contract, not a BFF protected-route test.
         error(refresh(rt(first)), 401, "REFRESH_REJECTED", "RELOGIN");
         assertThat(
                         call(
@@ -95,5 +101,61 @@ class FullLoginFlowTest extends HttpAuthTestSupport {
         assertThat(accounts.findByIdentity("google", subject).orElseThrow().user().id())
                 .isEqualTo(user);
         assertThat(google.unexpectedCalls.get()).isZero();
+    }
+
+    @Test
+    void legacyTokensAndLegacyKeysCannotRestoreADeletedSession() throws Exception {
+        var initial = login("legacy-" + UUID.randomUUID());
+        var claims = jwt.verifyRefresh(rt(initial), false);
+        var parsed = SignedJWT.parse(rt(initial));
+        var legacy =
+                new SignedJWT(
+                        parsed.getHeader(),
+                        new com.nimbusds.jwt.JWTClaimsSet.Builder(parsed.getJWTClaimsSet())
+                                .claim("sid", null)
+                                .build());
+        legacy.sign(new com.nimbusds.jose.crypto.RSASSASigner(TestKeys.PAIR.getPrivate()));
+        var key = "auth:session:" + claims.userId();
+        var before = redis.opsForValue().get(key);
+        redis.opsForValue()
+                .set(
+                        "auth:refresh:" + claims.jti(),
+                        claims.userId().toString(),
+                        java.time.Duration.ofMinutes(5));
+        error(refresh(legacy.serialize()), 401, "REFRESH_REJECTED", "RELOGIN");
+        error(
+                call(
+                        "POST",
+                        "/auth/tokens/revoke",
+                        Map.of("refresh_token", legacy.serialize()),
+                        null),
+                401,
+                "INVALID_REFRESH_TOKEN",
+                "NONE");
+        assertThat(redis.opsForValue().get(key)).isEqualTo(before);
+        redis.expireAt(key, java.time.Instant.EPOCH);
+        error(refresh(rt(initial)), 401, "REFRESH_REJECTED", "RELOGIN");
+        assertThat(redis.hasKey(key)).isFalse();
+        assertThat(redis.hasKey("auth:refresh:" + claims.jti())).isTrue();
+    }
+
+    @Test
+    void anotherUsersSessionSurvivesRefreshAndLogout() {
+        var one = login("user-one-" + UUID.randomUUID());
+        var two = login("user-two-" + UUID.randomUUID());
+        var userTwo = jwt.verifyRefresh(rt(two), false).userId();
+        var before = redis.opsForValue().get("auth:session:" + userTwo);
+        var rotated = refresh(rt(one));
+        assertThat(rotated.status()).isEqualTo(200);
+        assertThat(
+                        call(
+                                        "POST",
+                                        "/auth/tokens/revoke",
+                                        Map.of("refresh_token", rt(rotated)),
+                                        null)
+                                .status())
+                .isEqualTo(204);
+        assertThat(redis.opsForValue().get("auth:session:" + userTwo)).isEqualTo(before);
+        assertThat(refresh(rt(two)).status()).isEqualTo(200);
     }
 }
