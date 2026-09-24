@@ -5,6 +5,9 @@ Authentication service for Lore Sentry.
 Handles the Google-based sign-in flow, user account and display name data, and
 authentication session/token logic used by the Gateway/BFF.
 
+See the [code reading guide](docs/code-guide.md) for package responsibilities,
+the login request flow, and startup configuration.
+
 Reached only through `loresentry-gateway` — this service is `ClusterIP` and has
 no route from outside the cluster.
 
@@ -148,6 +151,22 @@ ID with the BFF.
 settings with `@ConfigurationProperties` and validate required values at startup.
 The environment variables above remain unchanged. RSA key validation and the
 Google callback URL restrictions still run when the adapters are configured.
+
+## Code formatting
+
+Spotless is a Gradle build plugin, not an application runtime dependency.
+`build.gradle` pins Spotless and google-java-format versions and selects AOSP
+style with four-space indentation. It formats Java files under `src/main/java`
+and `src/test/java`; generated sources under `build/` are excluded.
+
+```bash
+./gradlew spotlessApply
+./gradlew spotlessCheck
+```
+
+`spotlessApply` rewrites source files; `spotlessCheck` reports violations without
+changing files. The check also runs as part of `./gradlew build`, including the
+existing CI build. Use the Gradle task as the formatting reference across editors.
 
 ## Test
 

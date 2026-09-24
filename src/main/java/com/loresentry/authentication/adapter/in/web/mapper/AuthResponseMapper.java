@@ -11,14 +11,21 @@ import org.mapstruct.MappingConstants;
 import org.mapstruct.Named;
 import org.mapstruct.ReportingPolicy;
 
-@Mapper(componentModel = MappingConstants.ComponentModel.SPRING, unmappedTargetPolicy = ReportingPolicy.ERROR)
+@Mapper(
+        componentModel = MappingConstants.ComponentModel.SPRING,
+        unmappedTargetPolicy = ReportingPolicy.ERROR)
 public interface AuthResponseMapper {
     AuthResponses.PreparedLogin preparedLogin(LoginUseCase.PreparedLogin login);
+
     AuthResponses.Tokens tokens(TokenPair tokens);
+
     AuthResponses.Profile profile(AccountUseCase.Profile profile);
 
     @Mapping(target = ".", source = "tokens")
-    @Mapping(target = "loginRequestConsumed", source = "consumption", qualifiedByName = "consumptionFlag")
+    @Mapping(
+            target = "loginRequestConsumed",
+            source = "consumption",
+            qualifiedByName = "consumptionFlag")
     AuthResponses.Callback callback(LoginUseCase.LoginResult login);
 
     @Named("consumptionFlag")

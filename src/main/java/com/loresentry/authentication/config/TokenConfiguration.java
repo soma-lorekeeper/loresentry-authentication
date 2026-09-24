@@ -8,8 +8,15 @@ import org.springframework.context.annotation.Configuration;
 
 @Configuration(proxyBeanMethods = false)
 public class TokenConfiguration {
-    @Bean com.loresentry.authentication.application.port.in.RevokeUseCase revokeTokens(JwtTokens jwt, RefreshTokenStore store, java.time.Clock clock) {
-        return new com.loresentry.authentication.application.service.RevokeService(jwt, store, clock);
+    @Bean
+    com.loresentry.authentication.application.port.in.RevokeUseCase revokeTokens(
+            JwtTokens jwt, RefreshTokenStore store, java.time.Clock clock) {
+        return new com.loresentry.authentication.application.service.RevokeService(
+                jwt, store, clock);
     }
-    @Bean RefreshUseCase refreshTokens(JwtTokens jwt, RefreshTokenStore store) { return new RefreshService(jwt, store); }
+
+    @Bean
+    RefreshUseCase refreshTokens(JwtTokens jwt, RefreshTokenStore store) {
+        return new RefreshService(jwt, store);
+    }
 }

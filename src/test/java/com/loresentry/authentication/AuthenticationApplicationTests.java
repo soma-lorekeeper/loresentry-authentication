@@ -7,14 +7,14 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.test.context.SpringBootTest;
 
 @SpringBootTest
-class AuthenticationApplicationTests extends com.loresentry.authentication.support.DatabaseTestSupport {
+class AuthenticationApplicationTests
+        extends com.loresentry.authentication.support.DatabaseTestSupport {
 
     @Value("${spring.threads.virtual.enabled}")
     private boolean virtualThreadsEnabled;
 
     @Test
-    void contextLoads() {
-    }
+    void contextLoads() {}
 
     @Test
     void virtualThreadsAreEnabled() {

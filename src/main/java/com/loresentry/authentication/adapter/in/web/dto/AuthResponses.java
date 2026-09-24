@@ -12,18 +12,22 @@ public final class AuthResponses {
     public record PreparedLogin(
             @JsonProperty("authorization_url") URI authorizationUrl,
             @JsonProperty("login_request_id") String loginRequestId,
-            @JsonProperty("expires_at") Instant expiresAt
-    ) {
-        @Override public String toString() { return "PreparedLogin[REDACTED]"; }
+            @JsonProperty("expires_at") Instant expiresAt) {
+        @Override
+        public String toString() {
+            return "PreparedLogin[REDACTED]";
+        }
     }
 
     public record Tokens(
             @JsonProperty("access_token") String accessToken,
             @JsonProperty("access_expires_at") Instant accessExpiresAt,
             @JsonProperty("refresh_token") String refreshToken,
-            @JsonProperty("refresh_expires_at") Instant refreshExpiresAt
-    ) {
-        @Override public String toString() { return "Tokens[REDACTED]"; }
+            @JsonProperty("refresh_expires_at") Instant refreshExpiresAt) {
+        @Override
+        public String toString() {
+            return "Tokens[REDACTED]";
+        }
     }
 
     @JsonInclude(JsonInclude.Include.ALWAYS)
@@ -32,15 +36,14 @@ public final class AuthResponses {
             @JsonProperty("access_expires_at") Instant accessExpiresAt,
             @JsonProperty("refresh_token") String refreshToken,
             @JsonProperty("refresh_expires_at") Instant refreshExpiresAt,
-            @JsonProperty("login_request_consumed") Boolean loginRequestConsumed
-    ) {
-        @Override public String toString() { return "Callback[REDACTED]"; }
+            @JsonProperty("login_request_consumed") Boolean loginRequestConsumed) {
+        @Override
+        public String toString() {
+            return "Callback[REDACTED]";
+        }
     }
 
     @JsonInclude(JsonInclude.Include.ALWAYS)
     public record Profile(
-            UUID id,
-            @JsonProperty("display_name") String displayName,
-            String email
-    ) {}
+            UUID id, @JsonProperty("display_name") String displayName, String email) {}
 }

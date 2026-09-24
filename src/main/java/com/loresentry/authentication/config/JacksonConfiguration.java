@@ -12,13 +12,23 @@ import tools.jackson.databind.type.LogicalType;
 public class JacksonConfiguration {
     @Bean
     JsonMapperBuilderCustomizer strictRequestJson() {
-        // Preserve the former JsonNode boundary: unknown fields and non-string credentials are invalid.
-        return builder -> builder
-                .enable(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES,
-                        DeserializationFeature.FAIL_ON_IGNORED_PROPERTIES)
-                .withCoercionConfig(LogicalType.Textual, config -> config
-                        .setCoercion(CoercionInputShape.Integer, CoercionAction.Fail)
-                        .setCoercion(CoercionInputShape.Float, CoercionAction.Fail)
-                        .setCoercion(CoercionInputShape.Boolean, CoercionAction.Fail));
+        // Preserve the former JsonNode boundary: unknown fields and non-string credentials are
+        // invalid.
+        return builder ->
+                builder.enable(
+                                DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES,
+                                DeserializationFeature.FAIL_ON_IGNORED_PROPERTIES)
+                        .withCoercionConfig(
+                                LogicalType.Textual,
+                                config ->
+                                        config.setCoercion(
+                                                        CoercionInputShape.Integer,
+                                                        CoercionAction.Fail)
+                                                .setCoercion(
+                                                        CoercionInputShape.Float,
+                                                        CoercionAction.Fail)
+                                                .setCoercion(
+                                                        CoercionInputShape.Boolean,
+                                                        CoercionAction.Fail));
     }
 }

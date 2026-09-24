@@ -1,34 +1,74 @@
 package com.loresentry.authentication.application.service;
 
-import lombok.RequiredArgsConstructor;
-import com.loresentry.authentication.application.port.in.*;
-import com.loresentry.authentication.application.port.out.*;
-import static com.loresentry.authentication.application.port.in.AuthFailure.Consumption.*;
-import static com.loresentry.authentication.application.port.in.AuthFailure.Reason.*;
+import static com.loresentry.authentication.application.port.in.AuthFailure.Consumption.CONSUMED;
+import static com.loresentry.authentication.application.port.in.AuthFailure.Consumption.UNKNOWN;
+import static com.loresentry.authentication.application.port.in.AuthFailure.Reason.INTERNAL_ERROR;
+import static com.loresentry.authentication.application.port.in.AuthFailure.Reason.LOGIN_UNAVAILABLE;
+import static com.loresentry.authentication.application.port.in.AuthFailure.Reason.OAUTH_IDENTITY_INVALID;
+import static com.loresentry.authentication.application.port.in.AuthFailure.Reason.OAUTH_LOGIN_DENIED;
 
+import com.loresentry.authentication.application.port.in.AuthFailure;
+import com.loresentry.authentication.application.port.in.LoginUseCase;
+import com.loresentry.authentication.application.port.in.RegisterIdentityUseCase;
+import com.loresentry.authentication.application.port.out.JwtTokens;
+import com.loresentry.authentication.application.port.out.OAuthStateStore;
+import com.loresentry.authentication.application.port.out.OidcClient;
+import com.loresentry.authentication.application.port.out.PortFailure;
+import com.loresentry.authentication.application.port.out.RefreshTokenStore;
+import lombok.RequiredArgsConstructor;
+
+/**
+ * 로그인 요청 소모, 공급자 신원 검증, 계정 등록과 토큰 발급을 순서대로 연결한다.
+ *
+ * <p>계정 변경의 DB 커밋 이후 토큰을 발급하고 RT를 저장한다. 이후 실패가 계정 커밋이나 로그인 요청 소모를 되돌리지는 않는다.
+ */
 @RequiredArgsConstructor
 public final class LoginService implements LoginUseCase {
-    private final OAuthRequests requests;
-    private final OidcClient provider;
-    private final RegisterIdentityUseCase accounts;
-    private final JwtTokens jwt;
-    private final RefreshTokenStore refresh;
-    public PreparedLogin prepare() { return requests.prepare(); }
+    private final OAuthRequests oauthRequests;
+    private final OidcClient oidcClient;
+    private final RegisterIdentityUseCase accountRegistration;
+    private final JwtTokens jwtTokens;
+    private final RefreshTokenStore refreshTokenStore;
+
+    @Override
+    public PreparedLogin prepare() {
+        return oauthRequests.prepare();
+    }
+
+    @Override
     public LoginResult callback(Callback command) {
-        OAuthStateStore.State state;
-        try { state = requests.consume(command); }
-        catch (AuthFailure failure) { throw failure; }
-        catch (RuntimeException failure) { throw new AuthFailure(INTERNAL_ERROR, UNKNOWN, failure); }
-        if (command.error() != null && !command.error().isBlank()) throw new AuthFailure(OAUTH_LOGIN_DENIED, CONSUMED);
+        var loginState = consumeLoginRequest(command);
+        if (command.error() != null && !command.error().isBlank()) {
+            throw new AuthFailure(OAUTH_LOGIN_DENIED, CONSUMED);
+        }
         try {
-            var identity = provider.exchange(command.code(), state);
-            var user = accounts.register(identity); // Account port returns only after the DB transaction commits.
-            var issued = jwt.issue(user.id());
-            refresh.save(issued.refreshJti(), user.id(), issued.tokens().refreshExpiresAt());
-            return new LoginResult(issued.tokens(), CONSUMED);
+            var identity = oidcClient.exchange(command.code(), loginState);
+            // Account registration returns only after the DB transaction commits.
+            var user = accountRegistration.register(identity);
+            var issuedTokens = jwtTokens.issue(user.id());
+            refreshTokenStore.save(
+                    issuedTokens.refreshJti(), user.id(), issuedTokens.tokens().refreshExpiresAt());
+            return new LoginResult(issuedTokens.tokens(), CONSUMED);
         } catch (PortFailure failure) {
-            throw new AuthFailure(failure.kind() == PortFailure.Kind.INVALID_IDENTITY ? OAUTH_IDENTITY_INVALID : LOGIN_UNAVAILABLE, CONSUMED);
-        } catch (AuthFailure failure) { throw new AuthFailure(failure.reason(), CONSUMED); }
-        catch (RuntimeException failure) { throw new AuthFailure(INTERNAL_ERROR, CONSUMED, failure); }
+            var reason =
+                    failure.kind() == PortFailure.Kind.INVALID_IDENTITY
+                            ? OAUTH_IDENTITY_INVALID
+                            : LOGIN_UNAVAILABLE;
+            throw new AuthFailure(reason, CONSUMED);
+        } catch (AuthFailure failure) {
+            throw new AuthFailure(failure.reason(), CONSUMED);
+        } catch (RuntimeException failure) {
+            throw new AuthFailure(INTERNAL_ERROR, CONSUMED, failure);
+        }
+    }
+
+    private OAuthStateStore.State consumeLoginRequest(Callback command) {
+        try {
+            return oauthRequests.consume(command);
+        } catch (AuthFailure failure) {
+            throw failure;
+        } catch (RuntimeException failure) {
+            throw new AuthFailure(INTERNAL_ERROR, UNKNOWN, failure);
+        }
     }
 }

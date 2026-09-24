@@ -1,8 +1,7 @@
 package com.loresentry.authentication.adapter.in.web;
 
-import lombok.RequiredArgsConstructor;
 import java.util.Map;
-
+import lombok.RequiredArgsConstructor;
 import org.springframework.dao.DataAccessException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -18,26 +17,30 @@ public class DbHealthController {
 
     private final JdbcClient jdbcClient;
 
-
     @GetMapping("/health/db")
     public ResponseEntity<Map<String, Object>> databaseHealth() {
         try {
-            Map<String, Object> row = jdbcClient
-                    .sql("select current_database() as database, current_user as username, version() as version")
-                    .query()
-                    .singleRow();
+            Map<String, Object> row =
+                    jdbcClient
+                            .sql(
+                                    "select current_database() as database, current_user as username, version() as version")
+                            .query()
+                            .singleRow();
 
-            return ResponseEntity.ok(Map.of(
-                    "status", "ok",
-                    "service", SERVICE,
-                    "database", row.get("database"),
-                    "username", row.get("username"),
-                    "version", row.get("version")));
+            return ResponseEntity.ok(
+                    Map.of(
+                            "status", "ok",
+                            "service", SERVICE,
+                            "database", row.get("database"),
+                            "username", row.get("username"),
+                            "version", row.get("version")));
         } catch (DataAccessException exception) {
-            return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE).body(Map.of(
-                    "status", "error",
-                    "service", SERVICE,
-                    "error", "Database unavailable"));
+            return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)
+                    .body(
+                            Map.of(
+                                    "status", "error",
+                                    "service", SERVICE,
+                                    "error", "Database unavailable"));
         }
     }
 }

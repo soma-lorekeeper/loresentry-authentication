@@ -12,9 +12,14 @@ import org.springframework.context.annotation.Configuration;
 @Configuration(proxyBeanMethods = false)
 @EnableConfigurationProperties(JwtProperties.class)
 public class JwtConfiguration {
-    @Bean public JwtTokens jwtTokens(JwtKeys keys, Clock clock) { return new RsaJwtTokens(keys, clock); }
+    @Bean
+    public JwtTokens jwtTokens(JwtKeys keys, Clock clock) {
+        return new RsaJwtTokens(keys, clock);
+    }
+
     @Bean
     public JwtKeys jwtKeys(JwtProperties properties) {
-        return JwtKeys.load(properties.privateKeyBase64(), properties.publicKeyPath(), properties.keyId());
+        return JwtKeys.load(
+                properties.privateKeyBase64(), properties.publicKeyPath(), properties.keyId());
     }
 }

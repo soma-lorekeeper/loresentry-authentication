@@ -7,6 +7,11 @@ import java.util.UUID;
 import java.util.function.Supplier;
 
 public final class UuidUserIdGenerator implements UserIdGenerator {
-    private final Supplier<UUID> generator = Generators.timeBasedEpochRandomGenerator(new SecureRandom())::generate;
-    @Override public UUID generate() { return generator.get(); }
+    private final Supplier<UUID> generator =
+            Generators.timeBasedEpochRandomGenerator(new SecureRandom())::generate;
+
+    @Override
+    public UUID generate() {
+        return generator.get();
+    }
 }

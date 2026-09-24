@@ -10,9 +10,17 @@ import lombok.Getter;
 @AllArgsConstructor
 public class OAuthIdentityEntity {
     @EmbeddedId private OAuthIdentityId id;
+
     @ManyToOne(fetch = FetchType.LAZY, optional = false)
-    @JoinColumn(name = "user_id", nullable = false) private UserEntity user;
-    @Column(name = "email", length = 320) private String email;
+    @JoinColumn(name = "user_id", nullable = false)
+    private UserEntity user;
+
+    @Column(name = "email", length = 320)
+    private String email;
+
     protected OAuthIdentityEntity() {}
-    public void updateEmail(String value) { email = value; }
+
+    public void updateEmail(String value) {
+        email = value;
+    }
 }

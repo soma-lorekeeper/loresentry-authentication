@@ -15,8 +15,7 @@ public final class AuthRequests {
             @JsonProperty("login_request_id") @NotBlank String loginRequestId,
             @NotBlank String state,
             String code,
-            String error
-    ) {
+            String error) {
         @AssertTrue
         @JsonIgnore
         public boolean isValidOutcome() {
@@ -24,11 +23,17 @@ public final class AuthRequests {
                     || (error != null && !error.isBlank() && code == null);
         }
 
-        @Override public String toString() { return "Callback[REDACTED]"; }
+        @Override
+        public String toString() {
+            return "Callback[REDACTED]";
+        }
     }
 
     public record RefreshToken(@JsonProperty("refresh_token") @NotBlank String refreshToken) {
-        @Override public String toString() { return "RefreshToken[REDACTED]"; }
+        @Override
+        public String toString() {
+            return "RefreshToken[REDACTED]";
+        }
     }
 
     // Blank/long names remain domain failures (INVALID_DISPLAY_NAME), not malformed requests.

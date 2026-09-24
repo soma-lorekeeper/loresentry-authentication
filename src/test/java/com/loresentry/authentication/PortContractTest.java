@@ -1,5 +1,7 @@
 package com.loresentry.authentication;
 
+import static org.assertj.core.api.Assertions.*;
+
 import com.loresentry.authentication.application.port.in.AuthFailure;
 import com.loresentry.authentication.application.port.in.TokenPair;
 import com.loresentry.authentication.application.port.out.PortFailure;
@@ -15,8 +17,6 @@ import java.util.UUID;
 import org.junit.jupiter.api.Test;
 import org.springframework.context.annotation.AnnotationConfigApplicationContext;
 
-import static org.assertj.core.api.Assertions.*;
-
 class PortContractTest {
     @Test
     void absenceIsDifferentFromUnknownConsumption() {
@@ -27,7 +27,8 @@ class PortContractTest {
         store.save(jti, user, clock.instant().plusSeconds(10));
         assertThat(store.consume(jti)).contains(user);
         assertThat(store.consume(jti)).isEmpty();
-        store.failure = new PortFailure(PortFailure.Kind.UNAVAILABLE, PortFailure.Execution.UNKNOWN, true);
+        store.failure =
+                new PortFailure(PortFailure.Kind.UNAVAILABLE, PortFailure.Execution.UNKNOWN, true);
         assertThatThrownBy(() -> store.consume(jti)).isSameAs(store.failure);
         assertThat(store.failure.execution()).isEqualTo(PortFailure.Execution.UNKNOWN);
     }
@@ -44,10 +45,17 @@ class PortContractTest {
     @Test
     void consumptionHasThreeCallbackStatesAndNoCallbackStateForOtherFailures() {
         for (var state : AuthFailure.Consumption.values()) {
-            assertThat(new AuthFailure(AuthFailure.Reason.LOGIN_UNAVAILABLE, state).consumption()).isEqualTo(state);
+            assertThat(new AuthFailure(AuthFailure.Reason.LOGIN_UNAVAILABLE, state).consumption())
+                    .isEqualTo(state);
         }
         assertThat(new AuthFailure(AuthFailure.Reason.REFRESH_REJECTED).consumption()).isNull();
-        assertThat(new TokenPair("access-secret", Instant.EPOCH, "refresh-secret", Instant.EPOCH).toString())
+        assertThat(
+                        new TokenPair(
+                                        "access-secret",
+                                        Instant.EPOCH,
+                                        "refresh-secret",
+                                        Instant.EPOCH)
+                                .toString())
                 .doesNotContain("access-secret", "refresh-secret");
     }
 
@@ -61,17 +69,29 @@ class PortContractTest {
 
     private static final class FakeRefreshStore implements RefreshTokenStore {
         private record Entry(UUID user, Instant expiresAt) {}
+
         private final Clock clock;
         private final Map<UUID, Entry> entries = new HashMap<>();
         private PortFailure failure;
-        private FakeRefreshStore(Clock clock) { this.clock = clock; }
-        public void save(UUID jti, UUID userId, Instant expiresAt) { entries.put(jti, new Entry(userId, expiresAt)); }
+
+        private FakeRefreshStore(Clock clock) {
+            this.clock = clock;
+        }
+
+        public void save(UUID jti, UUID userId, Instant expiresAt) {
+            entries.put(jti, new Entry(userId, expiresAt));
+        }
+
         public Optional<UUID> consume(UUID jti) {
             if (failure != null) throw failure;
             var entry = entries.remove(jti);
             return entry != null && clock.instant().isBefore(entry.expiresAt())
-                    ? Optional.of(entry.user()) : Optional.empty();
+                    ? Optional.of(entry.user())
+                    : Optional.empty();
         }
-        public void delete(UUID jti) { entries.remove(jti); }
+
+        public void delete(UUID jti) {
+            entries.remove(jti);
+        }
     }
 }
