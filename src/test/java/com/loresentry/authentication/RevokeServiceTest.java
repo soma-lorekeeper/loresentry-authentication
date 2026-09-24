@@ -13,9 +13,9 @@ import org.junit.jupiter.api.Test;
 
 class RevokeServiceTest {
     final JwtTokens jwt = mock(JwtTokens.class);
-    final RefreshTokenStore store = mock(RefreshTokenStore.class);
+    final SessionStore store = mock(SessionStore.class);
     final Instant now = Instant.parse("2026-09-17T00:00:00Z");
-    final UUID jti = UUID.randomUUID();
+    final UUID jti = UUID.randomUUID(), user = UUID.randomUUID(), sid = UUID.randomUUID();
     final AtomicLong elapsed = new AtomicLong();
     final List<Long> waits = new ArrayList<>();
 
@@ -33,9 +33,7 @@ class RevokeServiceTest {
 
     void valid(Instant exp) {
         when(jwt.verifyRefresh("rt", true))
-                .thenReturn(
-                        new JwtTokens.RefreshClaims(
-                                UUID.randomUUID(), UUID.randomUUID(), jti, exp));
+                .thenReturn(new JwtTokens.RefreshClaims(user, sid, jti, exp));
     }
 
     PortFailure temporary() {
@@ -51,14 +49,14 @@ class RevokeServiceTest {
                             throw temporary();
                         })
                 .when(store)
-                .delete(jti);
+                .revoke(user, sid, now.plusSeconds(300));
         assertThatThrownBy(() -> service().revoke("rt"))
                 .isInstanceOfSatisfying(
                         AuthFailure.class,
                         e ->
                                 assertThat(e.reason())
                                         .isEqualTo(AuthFailure.Reason.REVOCATION_UNCONFIRMED));
-        verify(store, times(3)).delete(jti);
+        verify(store, times(3)).revoke(user, sid, now.plusSeconds(300));
         assertThat(waits).containsExactly(100L, 200L);
         assertThat(elapsed.get()).isEqualTo(1_800_000_000);
     }
@@ -72,18 +70,18 @@ class RevokeServiceTest {
                             throw temporary();
                         })
                 .when(store)
-                .delete(jti);
+                .revoke(user, sid, now.plusSeconds(300));
         assertThatThrownBy(() -> service().revoke("rt")).isInstanceOf(AuthFailure.class);
-        verify(store, times(1)).delete(jti);
+        verify(store, times(1)).revoke(user, sid, now.plusSeconds(300));
         assertThat(elapsed.get()).isLessThanOrEqualTo(2_000_000_000L);
     }
 
     @Test
     void successAfterTimeoutAndNonTransientFailureHaveDifferentRetryRules() {
         valid(now.plusSeconds(300));
-        doThrow(temporary()).doNothing().when(store).delete(jti);
+        doThrow(temporary()).doNothing().when(store).revoke(user, sid, now.plusSeconds(300));
         service().revoke("rt");
-        verify(store, times(2)).delete(jti);
+        verify(store, times(2)).revoke(user, sid, now.plusSeconds(300));
         reset(store);
         waits.clear();
         doThrow(
@@ -92,9 +90,9 @@ class RevokeServiceTest {
                                 PortFailure.Execution.NOT_EXECUTED,
                                 false))
                 .when(store)
-                .delete(jti);
+                .revoke(user, sid, now.plusSeconds(300));
         assertThatThrownBy(() -> service().revoke("rt")).isInstanceOf(AuthFailure.class);
-        verify(store, times(1)).delete(jti);
+        verify(store, times(1)).revoke(user, sid, now.plusSeconds(300));
         assertThat(waits).isEmpty();
     }
 

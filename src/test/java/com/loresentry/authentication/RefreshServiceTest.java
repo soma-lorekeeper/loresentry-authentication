@@ -13,23 +13,26 @@ import org.junit.jupiter.api.Test;
 
 class RefreshServiceTest {
     final JwtTokens jwt = mock(JwtTokens.class);
-    final RefreshTokenStore store = mock(RefreshTokenStore.class);
+    final SessionStore store = mock(SessionStore.class);
     final RefreshService service = new RefreshService(jwt, store);
     final UUID sid = UUID.randomUUID();
     final UUID user = UUID.randomUUID(), jti = UUID.randomUUID(), newJti = UUID.randomUUID();
+    final Instant now = Instant.now().truncatedTo(java.time.temporal.ChronoUnit.SECONDS);
     final TokenPair tokens =
-            new TokenPair(
-                    "at", Instant.now().plusSeconds(900), "rt", Instant.now().plusSeconds(1209600));
+            new TokenPair("at", now.plusSeconds(900), "rt", now.plusSeconds(1209600));
+    final SessionStore.Session expected = new SessionStore.Session(sid, jti, now.plusSeconds(300));
+    final SessionStore.Session replacement =
+            new SessionStore.Session(sid, newJti, tokens.refreshExpiresAt());
 
     void valid() {
         when(jwt.verifyRefresh("old", false))
                 .thenReturn(
-                        new JwtTokens.RefreshClaims(
-                                user, sid, jti, Instant.now().plusSeconds(300)));
+                        new JwtTokens.RefreshClaims(user, sid, jti, expected.refreshExpiresAt()));
+        when(jwt.issue(user, sid)).thenReturn(new JwtTokens.Issued(tokens, newJti));
     }
 
     @Test
-    void rejectsInvalidAbsentAndWrongOwnerBeforeIssuing() {
+    void invalidTokenNeverReachesSigningOrStorage() {
         when(jwt.verifyRefresh("invalid", false))
                 .thenThrow(
                         new PortFailure(
@@ -37,49 +40,61 @@ class RefreshServiceTest {
                                 PortFailure.Execution.NOT_EXECUTED,
                                 false));
         failure(() -> service.refresh("invalid"), REFRESH_REJECTED);
-        verifyNoInteractions(store);
-        valid();
-        when(store.consume(jti)).thenReturn(Optional.empty(), Optional.of(UUID.randomUUID()));
-        failure(() -> service.refresh("old"), REFRESH_REJECTED);
-        failure(() -> service.refresh("old"), REFRESH_REJECTED);
         verify(jwt, never()).issue(any(), any());
+        verifyNoInteractions(store);
     }
 
     @Test
-    void consumptionFailureNeverRetriesOrRestores() {
+    void rejectedComparisonDoesNotReturnTokensOrAttemptRecovery() {
         valid();
-        when(store.consume(jti))
+        when(store.rotate(user, expected, replacement)).thenReturn(false);
+        failure(() -> service.refresh("old"), REFRESH_REJECTED);
+        verify(store).rotate(user, expected, replacement);
+        verifyNoMoreInteractions(store);
+    }
+
+    @Test
+    void distinguishesNotExecutedUnknownAndCorruptDataWithoutRetry() {
+        valid();
+        when(store.rotate(user, expected, replacement))
                 .thenThrow(
                         new PortFailure(
                                 PortFailure.Kind.UNAVAILABLE,
                                 PortFailure.Execution.NOT_EXECUTED,
-                                true));
+                                true))
+                .thenThrow(
+                        new PortFailure(
+                                PortFailure.Kind.UNAVAILABLE, PortFailure.Execution.UNKNOWN, true))
+                .thenThrow(
+                        new PortFailure(
+                                PortFailure.Kind.INVALID_DATA,
+                                PortFailure.Execution.NOT_EXECUTED,
+                                false));
         failure(() -> service.refresh("old"), REFRESH_UNAVAILABLE);
-        doThrow(new PortFailure(PortFailure.Kind.UNAVAILABLE, PortFailure.Execution.UNKNOWN, true))
-                .when(store)
-                .consume(jti);
         failure(() -> service.refresh("old"), REFRESH_OUTCOME_UNKNOWN);
-        verify(store, times(2)).consume(jti);
-        verify(store, never()).save(any(), any(), any());
+        failure(() -> service.refresh("old"), INTERNAL_ERROR);
+        verify(store, times(3)).rotate(user, expected, replacement);
+        verifyNoMoreInteractions(store);
     }
 
     @Test
-    void returnsOnlyAfterSaveAndDoesNotReturnOnSaveFailure() {
+    void signsBeforeAtomicRotationAndReturnsOnlyAfterSuccess() {
         valid();
-        when(store.consume(jti)).thenReturn(Optional.of(user));
-        when(jwt.issue(user, sid)).thenReturn(new JwtTokens.Issued(tokens, newJti));
+        when(store.rotate(user, expected, replacement)).thenReturn(true);
         assertThat(service.refresh("old")).isEqualTo(tokens);
         var order = inOrder(jwt, store);
         order.verify(jwt).verifyRefresh("old", false);
-        order.verify(store).consume(jti);
         order.verify(jwt).issue(user, sid);
-        order.verify(store).save(newJti, user, tokens.refreshExpiresAt());
-        doThrow(new PortFailure(PortFailure.Kind.UNAVAILABLE, PortFailure.Execution.UNKNOWN, true))
-                .when(store)
-                .save(newJti, user, tokens.refreshExpiresAt());
-        failure(() -> service.refresh("old"), REFRESH_SAVE_FAILED);
-        verify(store, times(2)).save(newJti, user, tokens.refreshExpiresAt());
-        verify(store, never()).save(eq(jti), any(), any());
+        order.verify(store).rotate(user, expected, replacement);
+        order.verifyNoMoreInteractions();
+    }
+
+    @Test
+    void signingFailurePreservesTheCurrentSession() {
+        valid();
+        when(jwt.issue(user, sid)).thenThrow(new IllegalStateException("private signing detail"));
+        failure(() -> service.refresh("old"), INTERNAL_ERROR);
+        verifyNoInteractions(store);
     }
 
     void failure(

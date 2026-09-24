@@ -36,18 +36,18 @@ class FullLoginFlowTest extends HttpAuthTestSupport {
                 .isInstanceOf(RegistrationService.class);
         assertThat(accounts).isInstanceOf(JpaAccountStore.class);
         assertThat(states).isInstanceOf(RedisOAuthStateStore.class);
-        assertThat(refreshStates).isInstanceOf(RedisRefreshTokenStore.class);
+        assertThat(sessions).isInstanceOf(RedisSessionStore.class);
         assertThat(jwt).isInstanceOf(RsaJwtTokens.class);
         var provider = context.getBean(OidcClient.class);
         assertThat(provider).isInstanceOf(GoogleOidcClient.class);
         assertThat(ReflectionTestUtils.getField(context.getBean(LoginUseCase.class), "oidcClient"))
                 .isSameAs(provider);
         assertThat(ReflectionTestUtils.getField(context.getBean(RefreshUseCase.class), "store"))
-                .isSameAs(refreshStates);
+                .isSameAs(sessions);
     }
 
     @Test
-    void fullHttpLifecycleKeepsIdentityAndOtherDeviceState() throws Exception {
+    void fullHttpLifecycleReplacesSessionAndKeepsIdentity() throws Exception {
         var subject = "full-" + UUID.randomUUID();
         var first = login(subject);
         assertThat(first.body().get("login_request_consumed").booleanValue()).isTrue();
@@ -70,19 +70,28 @@ class FullLoginFlowTest extends HttpAuthTestSupport {
         assertThat(jwt.verifyRefresh(rt(second), false).userId()).isEqualTo(user);
         assertThat(call("GET", "/auth/users/me", null, user).body().get("display_name").asString())
                 .isEqualTo("My Name");
-        var oldJti = jwt.verifyRefresh(rt(first), false).jti();
-        var deviceJti = jwt.verifyRefresh(rt(second), false).jti();
-        var rotated = refresh(rt(first));
+        var firstClaims = jwt.verifyRefresh(rt(first), false);
+        var secondClaims = jwt.verifyRefresh(rt(second), false);
+        assertThat(secondClaims.sid()).isNotEqualTo(firstClaims.sid());
+        error(refresh(rt(first)), 401, "REFRESH_REJECTED", "RELOGIN");
+        assertThat(
+                        call(
+                                        "POST",
+                                        "/auth/tokens/revoke",
+                                        Map.of("refresh_token", rt(first)),
+                                        null)
+                                .status())
+                .isEqualTo(204);
+        var rotated = refresh(rt(second));
         assertThat(rotated.status()).isEqualTo(200);
-        assertThat(refreshStates.consume(oldJti)).isEmpty();
+        assertThat(jwt.verifyRefresh(rt(rotated), false).sid()).isEqualTo(secondClaims.sid());
         assertThat(rotated.body().has("login_request_consumed")).isFalse();
+        error(refresh(rt(second)), 401, "REFRESH_REJECTED", "RELOGIN");
         var revoked =
                 call("POST", "/auth/tokens/revoke", Map.of("refresh_token", rt(rotated)), null);
         assertThat(revoked.status()).isEqualTo(204);
         assertThat(revoked.body()).isNull();
         error(refresh(rt(rotated)), 401, "REFRESH_REJECTED", "RELOGIN");
-        assertThat(refresh(rt(second)).status()).isEqualTo(200);
-        assertThat(refreshStates.consume(deviceJti)).isEmpty();
         assertThat(accounts.findByIdentity("google", subject).orElseThrow().user().id())
                 .isEqualTo(user);
         assertThat(google.unexpectedCalls.get()).isZero();

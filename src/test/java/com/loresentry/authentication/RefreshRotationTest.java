@@ -19,17 +19,26 @@ import org.springframework.data.redis.core.StringRedisTemplate;
 class RefreshRotationTest extends DatabaseTestSupport {
     @Autowired JwtKeys keys;
     @Autowired JwtTokens jwt;
-    @Autowired RefreshTokenStore store;
+    @Autowired SessionStore store;
     @Autowired RefreshUseCase service;
     @Autowired StringRedisTemplate redis;
 
     @Test
-    void concurrentRotationHasOneWinnerAndDoesNotAffectAnotherDevice() throws Exception {
+    void concurrentRotationHasOneWinnerAndDoesNotAffectAnotherUser() throws Exception {
         UUID user = UUID.randomUUID();
-        var first = jwt.issue(user, UUID.randomUUID());
-        var second = jwt.issue(user, UUID.randomUUID());
-        store.save(first.refreshJti(), user, first.tokens().refreshExpiresAt());
-        store.save(second.refreshJti(), user, second.tokens().refreshExpiresAt());
+        var sid = UUID.randomUUID();
+        var otherUser = UUID.randomUUID();
+        var otherSid = UUID.randomUUID();
+        var first = jwt.issue(user, sid);
+        var second = jwt.issue(otherUser, otherSid);
+        store.replace(
+                user,
+                new SessionStore.Session(
+                        sid, first.refreshJti(), first.tokens().refreshExpiresAt()));
+        store.replace(
+                otherUser,
+                new SessionStore.Session(
+                        otherSid, second.refreshJti(), second.tokens().refreshExpiresAt()));
         var gate = new CountDownLatch(1);
         try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
             List<Future<Optional<TokenPair>>> results = new ArrayList<>();
@@ -55,7 +64,7 @@ class RefreshRotationTest extends DatabaseTestSupport {
         // Simulate losing the successful response: the old RT can never recover that result.
         assertThatThrownBy(() -> service.refresh(first.tokens().refreshToken()))
                 .isInstanceOf(AuthFailure.class);
-        assertThat(redis.hasKey("auth:refresh:" + second.refreshJti())).isTrue();
+        assertThat(redis.hasKey("auth:session:" + otherUser)).isTrue();
         assertThat(service.refresh(second.tokens().refreshToken())).isNotNull();
     }
 
@@ -64,15 +73,17 @@ class RefreshRotationTest extends DatabaseTestSupport {
         var user = UUID.randomUUID();
         var now = Instant.now().truncatedTo(java.time.temporal.ChronoUnit.SECONDS);
         var oldJwt = new RsaJwtTokens(keys, Clock.fixed(now.minusSeconds(86400), ZoneOffset.UTC));
-        var old = oldJwt.issue(user, UUID.randomUUID());
-        store.save(old.refreshJti(), user, old.tokens().refreshExpiresAt());
+        var sid = UUID.randomUUID();
+        var old = oldJwt.issue(user, sid);
+        store.replace(
+                user,
+                new SessionStore.Session(sid, old.refreshJti(), old.tokens().refreshExpiresAt()));
         var fixedJwt = new RsaJwtTokens(keys, Clock.fixed(now, ZoneOffset.UTC));
         var fresh = new RefreshService(fixedJwt, store).refresh(old.tokens().refreshToken());
         assertThat(fresh.refreshExpiresAt()).isEqualTo(now.plusSeconds(14 * 86400));
         var claims = fixedJwt.verifyRefresh(fresh.refreshToken(), false);
-        assertThat(redis.getExpire("auth:refresh:" + claims.jti()))
-                .isBetween(14L * 86400 - 5, 14L * 86400);
-        store.delete(claims.jti());
+        assertThat(redis.getExpire("auth:session:" + user)).isBetween(14L * 86400 - 5, 14L * 86400);
+        redis.delete("auth:session:" + user);
         assertThatThrownBy(() -> service.refresh(fresh.refreshToken()))
                 .isInstanceOfSatisfying(
                         AuthFailure.class,

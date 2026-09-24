@@ -10,7 +10,6 @@ import com.loresentry.authentication.domain.OAuthSecrets;
 import com.loresentry.authentication.support.*;
 import java.util.*;
 import java.util.concurrent.*;
-import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Supplier;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -23,7 +22,7 @@ import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
 @Import(HttpAuthTestSupport.GoogleHttpConfiguration.class)
 class FailureRegressionTest extends HttpAuthTestSupport {
     @MockitoSpyBean RedisOAuthStateStore stateAdapter;
-    @MockitoSpyBean RedisRefreshTokenStore tokenAdapter;
+    @MockitoSpyBean RedisSessionStore tokenAdapter;
     @MockitoSpyBean JpaAccountStore accountAdapter;
     @Autowired StringRedisTemplate redis;
 
@@ -97,7 +96,7 @@ class FailureRegressionTest extends HttpAuthTestSupport {
         var pending = pending(subject);
         doThrow(unavailable(PortFailure.Execution.UNKNOWN))
                 .when(tokenAdapter)
-                .save(any(), any(), any());
+                .replace(any(), any());
         var failed = callback(pending);
         error(failed, 503, "LOGIN_UNAVAILABLE", "RESTART_LOGIN");
         assertThat(failed.body().get("login_request_consumed").booleanValue()).isTrue();
@@ -107,40 +106,29 @@ class FailureRegressionTest extends HttpAuthTestSupport {
     }
 
     @Test
-    void refreshFailuresDistinguishNotExecutedUnknownAndFailedNewSave() {
+    void refreshFailuresDistinguishNotExecutedFromLostRotationResponse() {
         var initial = login("refresh-fail-" + UUID.randomUUID());
         var token = rt(initial);
-        var old = jwt.verifyRefresh(token, false).jti();
-        doThrow(unavailable(PortFailure.Execution.NOT_EXECUTED)).when(tokenAdapter).consume(old);
+        var claims = jwt.verifyRefresh(token, false);
+        var key = "auth:session:" + claims.userId();
+        var before = redis.opsForValue().get(key);
+        doThrow(unavailable(PortFailure.Execution.NOT_EXECUTED))
+                .when(tokenAdapter)
+                .rotate(eq(claims.userId()), any(), any());
         error(refresh(token), 503, "REFRESH_UNAVAILABLE", "RETRY_LATER");
-        assertThat(redis.hasKey("auth:refresh:" + old)).isTrue();
+        assertThat(redis.opsForValue().get(key)).isEqualTo(before);
         doAnswer(
                         call -> {
-                            call.callRealMethod();
+                            assertThat((Boolean) call.callRealMethod()).isTrue();
                             throw unavailable(PortFailure.Execution.UNKNOWN);
                         })
                 .when(tokenAdapter)
-                .consume(old);
+                .rotate(eq(claims.userId()), any(), any());
         error(refresh(token), 503, "REFRESH_OUTCOME_UNKNOWN", "RELOGIN");
-        assertThat(redis.hasKey("auth:refresh:" + old)).isFalse();
+        assertThat(redis.opsForValue().get(key)).isNotNull().isNotEqualTo(before);
+        verify(tokenAdapter, times(2)).rotate(eq(claims.userId()), any(), any());
         reset(tokenAdapter);
-        var another = login("save-fail-" + UUID.randomUUID());
-        var previous = jwt.verifyRefresh(rt(another), false).jti();
-        AtomicReference<UUID> newJti = new AtomicReference<>();
-        doAnswer(
-                        call -> {
-                            newJti.set(call.getArgument(0));
-                            call.callRealMethod();
-                            throw unavailable(PortFailure.Execution.UNKNOWN);
-                        })
-                .when(tokenAdapter)
-                .save(any(), any(), any());
-        var failed = refresh(rt(another));
-        error(failed, 503, "REFRESH_SAVE_FAILED", "RELOGIN");
-        assertThat(redis.hasKey("auth:refresh:" + previous)).isFalse();
-        assertThat(redis.hasKey("auth:refresh:" + newJti.get())).isTrue();
-        verify(tokenAdapter, times(1)).save(eq(newJti.get()), any(), any());
-        error(refresh(rt(another)), 401, "REFRESH_REJECTED", "RELOGIN");
+        error(refresh(token), 401, "REFRESH_REJECTED", "RELOGIN");
     }
 
     @Test
@@ -197,17 +185,19 @@ class FailureRegressionTest extends HttpAuthTestSupport {
         var second = login(subject);
         var token = rt(first);
         var claims = jwt.verifyRefresh(token, false);
-        var other = jwt.verifyRefresh(rt(second), false).jti();
-        doThrow(unavailable(PortFailure.Execution.UNKNOWN)).when(tokenAdapter).delete(claims.jti());
+        var before = redis.opsForValue().get("auth:session:" + claims.userId());
+        doThrow(unavailable(PortFailure.Execution.UNKNOWN))
+                .when(tokenAdapter)
+                .revoke(claims.userId(), claims.sid(), claims.expiresAt());
         error(
                 call("POST", "/auth/tokens/revoke", Map.of("refresh_token", token), null),
                 503,
                 "REVOCATION_UNCONFIRMED",
                 "NONE");
-        verify(tokenAdapter, times(3)).delete(claims.jti());
-        assertThat(redis.hasKey("auth:refresh:" + claims.jti())).isTrue();
-        assertThat(redis.hasKey("auth:refresh:" + other)).isTrue();
-        verify(tokenAdapter, never()).delete(other);
+        verify(tokenAdapter, times(3)).revoke(claims.userId(), claims.sid(), claims.expiresAt());
+        assertThat(redis.opsForValue().get("auth:session:" + claims.userId())).isEqualTo(before);
+        reset(tokenAdapter);
+        assertThat(refresh(rt(second)).status()).isEqualTo(200);
     }
 
     private PortFailure unavailable(PortFailure.Execution execution) {

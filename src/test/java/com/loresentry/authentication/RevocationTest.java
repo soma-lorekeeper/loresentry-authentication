@@ -3,7 +3,7 @@ package com.loresentry.authentication;
 import static org.assertj.core.api.Assertions.*;
 import static org.mockito.Mockito.*;
 
-import com.loresentry.authentication.adapter.out.redis.RedisRefreshTokenStore;
+import com.loresentry.authentication.adapter.out.redis.RedisSessionStore;
 import com.loresentry.authentication.application.port.in.*;
 import com.loresentry.authentication.application.port.out.*;
 import com.loresentry.authentication.support.DatabaseTestSupport;
@@ -19,20 +19,35 @@ import org.springframework.data.redis.core.StringRedisTemplate;
 @SpringBootTest
 class RevocationTest extends DatabaseTestSupport {
     @Autowired JwtTokens jwt;
-    @Autowired RefreshTokenStore store;
+    @Autowired SessionStore store;
     @Autowired RevokeUseCase revoke;
 
     @Test
-    void repeatRevocationPreservesOtherDeviceAndRejectsAt() {
+    void repeatRevocationPreservesNewSessionAndRejectsAt() {
         var user = UUID.randomUUID();
-        var one = jwt.issue(user, UUID.randomUUID());
-        var two = jwt.issue(user, UUID.randomUUID());
-        store.save(one.refreshJti(), user, one.tokens().refreshExpiresAt());
-        store.save(two.refreshJti(), user, two.tokens().refreshExpiresAt());
+        var firstSid = UUID.randomUUID();
+        var secondSid = UUID.randomUUID();
+        var one = jwt.issue(user, firstSid);
+        var two = jwt.issue(user, secondSid);
+        store.replace(
+                user,
+                new SessionStore.Session(
+                        firstSid, one.refreshJti(), one.tokens().refreshExpiresAt()));
+        var second =
+                new SessionStore.Session(
+                        secondSid, two.refreshJti(), two.tokens().refreshExpiresAt());
+        store.replace(user, second);
         revoke.revoke(one.tokens().refreshToken());
         revoke.revoke(one.tokens().refreshToken());
-        assertThat(store.consume(one.refreshJti())).isEmpty();
-        assertThat(store.consume(two.refreshJti())).contains(user);
+        assertThat(
+                        store.rotate(
+                                user,
+                                second,
+                                new SessionStore.Session(
+                                        secondSid,
+                                        UUID.randomUUID(),
+                                        two.tokens().refreshExpiresAt())))
+                .isTrue();
         assertThatThrownBy(() -> revoke.revoke(one.tokens().accessToken()))
                 .isInstanceOfSatisfying(
                         AuthFailure.class,
@@ -55,14 +70,19 @@ class RevocationTest extends DatabaseTestSupport {
                                 released.countDown();
                             }
                         });
-        var adapter =
-                new RedisRefreshTokenStore(new StringRedisTemplate(factory), Clock.systemUTC());
+        var adapter = new RedisSessionStore(new StringRedisTemplate(factory));
         try {
-            assertThatThrownBy(() -> adapter.delete(UUID.randomUUID()))
+            assertThatThrownBy(
+                            () ->
+                                    adapter.revoke(
+                                            UUID.randomUUID(),
+                                            UUID.randomUUID(),
+                                            Instant.now().plusSeconds(300)))
                     .isInstanceOfSatisfying(
                             PortFailure.class,
                             e -> {
-                                assertThat(e.execution()).isEqualTo(PortFailure.Execution.UNKNOWN);
+                                assertThat(e.execution())
+                                        .isEqualTo(PortFailure.Execution.NOT_EXECUTED);
                                 assertThat(e.retryable()).isTrue();
                             });
             assertThat(released.await(2, java.util.concurrent.TimeUnit.SECONDS)).isTrue();

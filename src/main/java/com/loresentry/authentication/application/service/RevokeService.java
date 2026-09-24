@@ -16,12 +16,12 @@ import java.util.function.LongSupplier;
  */
 public final class RevokeService implements RevokeUseCase {
     private final JwtTokens jwt;
-    private final RefreshTokenStore store;
+    private final SessionStore store;
     private final Clock clock;
     private final LongSupplier nanos;
     private final LongConsumer pause;
 
-    public RevokeService(JwtTokens jwt, RefreshTokenStore store, Clock clock) {
+    public RevokeService(JwtTokens jwt, SessionStore store, Clock clock) {
         this(
                 jwt,
                 store,
@@ -39,7 +39,7 @@ public final class RevokeService implements RevokeUseCase {
 
     public RevokeService(
             JwtTokens jwt,
-            RefreshTokenStore store,
+            SessionStore store,
             Clock clock,
             LongSupplier nanos,
             LongConsumer pause) {
@@ -67,7 +67,7 @@ public final class RevokeService implements RevokeUseCase {
             // budget.
             if (nanos.getAsLong() - started > 1_500_000_000L) break;
             try {
-                store.delete(claims.jti());
+                store.revoke(claims.userId(), claims.sid(), claims.expiresAt());
                 return;
             } catch (PortFailure e) {
                 if (!e.retryable()) break;

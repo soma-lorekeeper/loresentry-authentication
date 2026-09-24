@@ -4,42 +4,27 @@ import static org.assertj.core.api.Assertions.*;
 
 import com.loresentry.authentication.application.port.in.AuthFailure;
 import com.loresentry.authentication.application.port.in.TokenPair;
-import com.loresentry.authentication.application.port.out.PortFailure;
-import com.loresentry.authentication.application.port.out.RefreshTokenStore;
+import com.loresentry.authentication.application.port.out.SessionStore;
 import com.loresentry.authentication.config.CoreConfiguration;
 import java.time.Clock;
 import java.time.Instant;
 import java.time.ZoneOffset;
-import java.util.HashMap;
-import java.util.Map;
-import java.util.Optional;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
 import org.springframework.context.annotation.AnnotationConfigApplicationContext;
 
 class PortContractTest {
     @Test
-    void absenceIsDifferentFromUnknownConsumption() {
-        var clock = Clock.fixed(Instant.parse("2026-09-17T00:00:00Z"), ZoneOffset.UTC);
-        var store = new FakeRefreshStore(clock);
-        var jti = UUID.randomUUID();
-        var user = UUID.randomUUID();
-        store.save(jti, user, clock.instant().plusSeconds(10));
-        assertThat(store.consume(jti)).contains(user);
-        assertThat(store.consume(jti)).isEmpty();
-        store.failure =
-                new PortFailure(PortFailure.Kind.UNAVAILABLE, PortFailure.Execution.UNKNOWN, true);
-        assertThatThrownBy(() -> store.consume(jti)).isSameAs(store.failure);
-        assertThat(store.failure.execution()).isEqualTo(PortFailure.Execution.UNKNOWN);
-    }
-
-    @Test
-    void expiredFakeStateUsesInjectedClock() {
-        var clock = Clock.fixed(Instant.EPOCH, ZoneOffset.UTC);
-        var store = new FakeRefreshStore(clock);
-        var id = UUID.randomUUID();
-        store.save(id, UUID.randomUUID(), Instant.EPOCH);
-        assertThat(store.consume(id)).isEmpty();
+    void sessionRejectsNonUuidV4AndFractionalExpiry() {
+        var expiry = Instant.parse("2026-10-01T00:00:00Z");
+        assertThatThrownBy(
+                        () -> new SessionStore.Session(new UUID(0, 0), UUID.randomUUID(), expiry))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(
+                        () ->
+                                new SessionStore.Session(
+                                        UUID.randomUUID(), UUID.randomUUID(), expiry.plusNanos(1)))
+                .isInstanceOf(IllegalArgumentException.class);
     }
 
     @Test
@@ -63,35 +48,7 @@ class PortContractTest {
     void contextProvidesUtcClockWithoutFakeProductionAdapters() {
         try (var context = new AnnotationConfigApplicationContext(CoreConfiguration.class)) {
             assertThat(context.getBean(Clock.class).getZone()).isEqualTo(ZoneOffset.UTC);
-            assertThat(context.getBeansOfType(RefreshTokenStore.class)).isEmpty();
-        }
-    }
-
-    private static final class FakeRefreshStore implements RefreshTokenStore {
-        private record Entry(UUID user, Instant expiresAt) {}
-
-        private final Clock clock;
-        private final Map<UUID, Entry> entries = new HashMap<>();
-        private PortFailure failure;
-
-        private FakeRefreshStore(Clock clock) {
-            this.clock = clock;
-        }
-
-        public void save(UUID jti, UUID userId, Instant expiresAt) {
-            entries.put(jti, new Entry(userId, expiresAt));
-        }
-
-        public Optional<UUID> consume(UUID jti) {
-            if (failure != null) throw failure;
-            var entry = entries.remove(jti);
-            return entry != null && clock.instant().isBefore(entry.expiresAt())
-                    ? Optional.of(entry.user())
-                    : Optional.empty();
-        }
-
-        public void delete(UUID jti) {
-            entries.remove(jti);
+            assertThat(context.getBeansOfType(SessionStore.class)).isEmpty();
         }
     }
 }

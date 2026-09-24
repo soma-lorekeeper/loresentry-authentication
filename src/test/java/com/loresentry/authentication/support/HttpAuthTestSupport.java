@@ -37,7 +37,7 @@ public abstract class HttpAuthTestSupport extends DatabaseTestSupport {
     @Autowired protected JwtTokens jwt;
     @Autowired protected AccountStore accounts;
     @Autowired protected OAuthStateStore states;
-    @Autowired protected RefreshTokenStore refreshStates;
+    @Autowired protected SessionStore sessions;
 
     protected record Result(int status, JsonNode body, HttpHeaders headers) {}
 
