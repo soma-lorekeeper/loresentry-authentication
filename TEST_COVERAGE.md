@@ -1,85 +1,71 @@
 # Auth verification record
 
-The complete build passed on 2026-09-22: **129 tests, 0 failures, 0 errors and
-0 skipped tests**. This run covers LOREKEEPER-506 after rebasing onto the Flyway
-schema in `main` and adding the V2 transition to the current account model.
-The design source is the Loresentry docs repository's
-`auth/implementation/TEST_PLAN.md`; the table below connects every planned area
-to executable tests in this repository.
+On 2026-09-24, LOREKEEPER-535 passed the complete build with **152 tests,
+0 failures, 0 errors and 0 skipped tests** on both Redis 7.4 and Valkey 9.0.6.
+The implementation and test baseline is commit `2bdfaf0` on `work/LOREKEEPER-545`.
+The full deliverable is published to `deliverable/LOREKEEPER-535`; production rollout is separate.
 
-## Evidence
+## Environment and evidence
 
-Tests use Java 21, Spring Boot 4.1.1, disposable PostgreSQL 18.4 and Redis 7.4
-containers, and a controlled Google HTTP/JWK server. Real HTTP requests reach the
-Spring application in the lifecycle and failure regression tests. Fault injection
-uses spies around production adapters so actual DB/Redis state can be compared
-with the returned error. RSA keys are generated inside the test process.
+Both runs used Java 21 (`eclipse-temurin:21-jdk-alpine`), Spring Boot 4.1.1,
+PostgreSQL `18.4-alpine`, generated RSA keys and a controlled Google HTTP/JWK server.
+Testcontainers starts disposable services on random ports and does not read production
+connection settings. The Valkey image is `valkey/valkey:9.0.6-alpine`, matching the
+version in the GitOps Auth manifest. Its tested digest is
+`sha256:187679e3bd4036959631e3f03983ab2ba503ab21e6fd0454d508e909db2ee989`.
 
-| Planned verification | Executable evidence |
+| Verified behavior | Executable evidence |
 | --- | --- |
-| Fresh V1-to-V2 migration, empty deployed V1 upgrade, unchanged V1 checksum and repeat startup | [MigrationTest](src/test/java/com/loresentry/authentication/db/MigrationTest.java) |
-| Core isolation, fixed Clock and fake ports | [PortContractTest](src/test/java/com/loresentry/authentication/PortContractTest.java), [AccountServiceTest](src/test/java/com/loresentry/authentication/AccountServiceTest.java), [LoginServiceTest](src/test/java/com/loresentry/authentication/LoginServiceTest.java), [RefreshServiceTest](src/test/java/com/loresentry/authentication/RefreshServiceTest.java), [RevokeServiceTest](src/test/java/com/loresentry/authentication/RevokeServiceTest.java) |
-| PostgreSQL/Redis adapter behavior and disposable infrastructure | [InfrastructureTest](src/test/java/com/loresentry/authentication/InfrastructureTest.java), [AccountSchemaTest](src/test/java/com/loresentry/authentication/AccountSchemaTest.java), [OAuthStateStoreTest](src/test/java/com/loresentry/authentication/adapter/out/redis/OAuthStateStoreTest.java), [RefreshStoreTest](src/test/java/com/loresentry/authentication/adapter/out/redis/RefreshStoreTest.java) |
-| Google and JWT adapter success/failure contracts | [GoogleOidcClientTest](src/test/java/com/loresentry/authentication/adapter/out/google/GoogleOidcClientTest.java), [JwtKeysTest](src/test/java/com/loresentry/authentication/JwtKeysTest.java), [JwtTokensTest](src/test/java/com/loresentry/authentication/JwtTokensTest.java) |
-| ArchUnit dependency rules and production constructor wiring | [ArchitectureTest](src/test/java/com/loresentry/authentication/ArchitectureTest.java), [FullLoginFlowTest](src/test/java/com/loresentry/authentication/FullLoginFlowTest.java) |
-| All error codes, malformed JSON and rejected input fields | [ErrorContractTest](src/test/java/com/loresentry/authentication/web/ErrorContractTest.java), [AuthControllerTest](src/test/java/com/loresentry/authentication/web/AuthControllerTest.java), [AccountControllerTest](src/test/java/com/loresentry/authentication/web/AccountControllerTest.java) |
-| RT not-executed, unknown-consumption and new-save failure responses | [RefreshServiceTest](src/test/java/com/loresentry/authentication/RefreshServiceTest.java), [FailureRegressionTest](src/test/java/com/loresentry/authentication/FailureRegressionTest.java) |
-| Callback true/false/null outcomes and omission from other APIs | [OAuthConsumptionTest](src/test/java/com/loresentry/authentication/adapter/out/redis/OAuthConsumptionTest.java), [ErrorContractTest](src/test/java/com/loresentry/authentication/web/ErrorContractTest.java), [AuthControllerTest](src/test/java/com/loresentry/authentication/web/AuthControllerTest.java), [FailureRegressionTest](src/test/java/com/loresentry/authentication/FailureRegressionTest.java) |
-| Safe 500 responses, sanitized diagnostics and errors before MVC | [ErrorContractTest](src/test/java/com/loresentry/authentication/web/ErrorContractTest.java) |
-| Flyway/Hibernate schema, UUID v7, duplicate identity rollback and requery | [AccountSchemaTest](src/test/java/com/loresentry/authentication/AccountSchemaTest.java), [AccountConcurrencyTest](src/test/java/com/loresentry/authentication/AccountConcurrencyTest.java), [FailureRegressionTest](src/test/java/com/loresentry/authentication/FailureRegressionTest.java) |
-| Display name preservation, email refresh and committed-account survival | [AccountProfileTest](src/test/java/com/loresentry/authentication/AccountProfileTest.java), [LoginCommitTest](src/test/java/com/loresentry/authentication/LoginCommitTest.java), [FullLoginFlowTest](src/test/java/com/loresentry/authentication/FullLoginFlowTest.java), [FailureRegressionTest](src/test/java/com/loresentry/authentication/FailureRegressionTest.java) |
-| OAuth mismatch preserves state; expiry, absence and single consumption | [OAuthConsumptionTest](src/test/java/com/loresentry/authentication/adapter/out/redis/OAuthConsumptionTest.java), [FailureRegressionTest](src/test/java/com/loresentry/authentication/FailureRegressionTest.java) |
-| PKCE/nonce failure stops account creation and token issuance | [GoogleOidcClientTest](src/test/java/com/loresentry/authentication/adapter/out/google/GoogleOidcClientTest.java), [LoginServiceTest](src/test/java/com/loresentry/authentication/LoginServiceTest.java), [FailureRegressionTest](src/test/java/com/loresentry/authentication/FailureRegressionTest.java) |
-| JWT audience/type/signature/required claims/kid and time boundaries | [JwtTokensTest](src/test/java/com/loresentry/authentication/JwtTokensTest.java) |
-| Key validation, replacement keys and previous-token rejection | [JwtKeysTest](src/test/java/com/loresentry/authentication/JwtKeysTest.java), [JwtTokensTest](src/test/java/com/loresentry/authentication/JwtTokensTest.java) |
-| One RT rotation winner; failed save never returns tokens or restores old state | [RefreshRotationTest](src/test/java/com/loresentry/authentication/RefreshRotationTest.java), [RefreshServiceTest](src/test/java/com/loresentry/authentication/RefreshServiceTest.java), [FailureRegressionTest](src/test/java/com/loresentry/authentication/FailureRegressionTest.java) |
-| Lost refresh response cannot be recovered using the previous RT | [RefreshRotationTest](src/test/java/com/loresentry/authentication/RefreshRotationTest.java), [FailureRegressionTest](src/test/java/com/loresentry/authentication/FailureRegressionTest.java) |
-| Revocation attempts, waits, command/total limits and unknown outcome | [RevokeServiceTest](src/test/java/com/loresentry/authentication/RevokeServiceTest.java), [RevocationTest](src/test/java/com/loresentry/authentication/RevocationTest.java), [FailureRegressionTest](src/test/java/com/loresentry/authentication/FailureRegressionTest.java) |
-| Independent device tokens and the full HTTP login lifecycle | [FullLoginFlowTest](src/test/java/com/loresentry/authentication/FullLoginFlowTest.java), [RevocationTest](src/test/java/com/loresentry/authentication/RevocationTest.java), [FailureRegressionTest](src/test/java/com/loresentry/authentication/FailureRegressionTest.java) |
+| AT/RT share sid, independent jti, RS256, required claims, clocks and key rotation | [JwtTokensTest](src/test/java/com/loresentry/authentication/JwtTokensTest.java), [JwtKeysTest](src/test/java/com/loresentry/authentication/JwtKeysTest.java) |
+| Account commits before session replacement; signing failures preserve state | [LoginServiceTest](src/test/java/com/loresentry/authentication/LoginServiceTest.java), [LoginCommitTest](src/test/java/com/loresentry/authentication/LoginCommitTest.java) |
+| JSON schema, Lua TIME/PXAT, stale sid/jti/expiry rejection, corruption and command deadlines | [SessionStoreTest](src/test/java/com/loresentry/authentication/adapter/out/redis/SessionStoreTest.java) |
+| Independent connections: simultaneous logins/rotations, both orders of login/refresh/revoke, no observed gap during rotations | [SessionRaceTest](src/test/java/com/loresentry/authentication/adapter/out/redis/SessionRaceTest.java), [SessionStoreTest](src/test/java/com/loresentry/authentication/adapter/out/redis/SessionStoreTest.java) |
+| Same-sid rotation, one winner, sliding 14-day expiry, state loss and no recovery | [RefreshServiceTest](src/test/java/com/loresentry/authentication/RefreshServiceTest.java), [RefreshRotationTest](src/test/java/com/loresentry/authentication/RefreshRotationTest.java) |
+| Rotated unexpired RT revokes its session, expired RT is a no-op, retries preserve new login and expiry guards | [RevokeServiceTest](src/test/java/com/loresentry/authentication/RevokeServiceTest.java), [RevocationTest](src/test/java/com/loresentry/authentication/RevocationTest.java) |
+| HTTP lifecycle, user isolation, active sid match, old AT sid mismatch, sidless RT rejection and no legacy-key fallback | [FullLoginFlowTest](src/test/java/com/loresentry/authentication/FullLoginFlowTest.java) |
+| Not-executed vs unknown rotation, signing/corruption 500, no secret leakage, callback consumption, no replay | [FailureRegressionTest](src/test/java/com/loresentry/authentication/FailureRegressionTest.java), [ErrorContractTest](src/test/java/com/loresentry/authentication/web/ErrorContractTest.java), [RedisDriverTest](src/test/java/com/loresentry/authentication/adapter/out/redis/RedisDriverTest.java) |
+| OAuth/PKCE/nonce, account races/profile, Flyway V1/V2, request DTO validation and architecture regressions | Existing Google/OAuth, Account, Migration, Controller and [ArchitectureTest](src/test/java/com/loresentry/authentication/ArchitectureTest.java) suites in the same full build |
 
-The PostgreSQL collision test forces two initial lookups to observe an absent
-identity. Both HTTP requests return the same committed user ID, while the adapter
-test separately checks that the losing transaction leaves no orphan user.
-
-Redis regression tests simulate a command that executes but loses its response.
-The consumed key stays deleted and the API reports an unknown result. A separate
-case saves the new RT before losing the save response: no token is returned and
-the previous RT remains unusable. A failed login save preserves the committed
-account. Callback PKCE and nonce failures leave no account behind.
+The race tests use barriers/latches to control order across independent clients.
+Timeout and lost-response tests inject adapter failures and compare actual state;
+they do not simulate a production network partition or failover.
+The AT assertions inspect the signed sid and shared record, not a live BFF route.
 
 ## Reproduce
 
-With Java 21 and Docker available:
+With Java 21 and Docker:
 
 ```bash
-./gradlew --no-daemon build
+./gradlew --no-daemon --max-workers=2 build
+AUTH_TEST_REDIS_IMAGE=valkey/valkey:9.0.6-alpine ./gradlew --no-daemon --max-workers=2 build
 ```
 
-This run used the command above in `eclipse-temurin:21-jdk-alpine` on the Linux
-host, with its Docker socket mounted for Testcontainers. To reproduce without a
-host JDK, run from the repository root:
+The selected image is a Gradle test input, so changing it reruns the tests.
+With no host JDK, run from this repository (set `AUTH_TEST_REDIS_IMAGE` to select Valkey):
 
 ```bash
 mkdir -p /tmp/loresentry-auth-gradle
 docker run --rm --user "$(id -u):$(id -g)" \
   --group-add "$(stat -c %g /var/run/docker.sock)" --network host \
-  -e TESTCONTAINERS_HOST_OVERRIDE=localhost -e GRADLE_USER_HOME=/cache \
+  -e AUTH_TEST_REDIS_IMAGE -e TESTCONTAINERS_HOST_OVERRIDE=localhost -e GRADLE_USER_HOME=/cache \
   -v /var/run/docker.sock:/var/run/docker.sock \
   -v /tmp/loresentry-auth-gradle:/cache -v "$PWD:$PWD" -w "$PWD" \
   eclipse-temurin:21-jdk-alpine ./gradlew build --no-daemon --max-workers=2
 ```
 
-Gradle writes machine-readable results to `build/test-results/test` and an HTML
-report to `build/reports/tests/test/index.html`. They are generated artifacts and
-are not committed. The infrastructure isolation test was also run in two separate
-executions during its implementation.
+Machine-readable results are in `build/test-results/test`; HTML is in
+`build/reports/tests/test/index.html`. Generated reports are not committed.
+Spotless and architecture checks run in the full build.
 
 ## External conditions not verified
 
-- A live Google application, consent screen, real credentials and Google callback registration.
-- Browser cookies, CSRF, multi-tab coordination and the actual BFF integration.
-- AWS network isolation, deployed PostgreSQL/Redis availability, production key distribution and deployment.
+BFF protection, cookies/CSRF/multiple tabs, live Google consent and credentials,
+production ACL/client initialization, network isolation, failover and deployment
+remain follow-up work. See the docs repository's `auth/implementation/SESSION_HANDOFF.md`.
+Auth completion alone does not prove immediate rejection of an old AT at a protected API.
 
-These conditions are outside the Auth implementation tests. The fixed Google
-endpoints and production callback remain configuration contracts; this run did
-not contact Google with user credentials or deploy the service.
+## Previous verification
+
+The [2026-09-22 record](docs/verification-2026-09-22.md) preserves the earlier
+129-test result for LOREKEEPER-506. Its device-preserving RT policy and separate
+GETDEL/save checks describe that earlier implementation, not the current contract.

@@ -38,15 +38,15 @@ Boot 4 moved several test annotations. The one this repo uses is
 ## Endpoints
 
 The `/auth` APIs are internal calls from the BFF. The BFF owns browser cookies,
-CSRF, CORS and access-token verification. Account calls trust its `X-User-Id`
+CSRF, CORS, access-token verification and per-request active-session checks. Account calls trust its `X-User-Id`
 header, so the deployment must keep this service unreachable from the internet.
 
 | Method | Path | Result |
 | --- | --- | --- |
 | `POST` | `/auth/oauth/google/prepare` | Google authorization URL and five-minute login request |
 | `POST` | `/auth/oauth/google/callback` | Verified Google identity mapped to a service account and tokens |
-| `POST` | `/auth/tokens/refresh` | Consume one RT and save a new AT/RT pair |
-| `POST` | `/auth/tokens/revoke` | Revoke the supplied RT; return an empty `204` |
+| `POST` | `/auth/tokens/refresh` | Atomically rotate the current session RT and return a new AT/RT pair |
+| `POST` | `/auth/tokens/revoke` | Conditionally revoke the supplied RT session; return an empty `204` |
 | `GET` | `/auth/users/me` | Account profile identified by `X-User-Id` |
 | `PATCH` | `/auth/users/me` | Change `display_name` only |
 | `GET` | `/health` | Process health |
@@ -77,6 +77,22 @@ transactions. It uses constructors for new entities and retains the supplied use
 entity for identity associations. Existing nickname, email and timestamp updates
 still use the entities' dedicated methods.
 
+## Single active session
+
+Each user has one `auth:session:{userId}` String containing JSON fields
+`schema_version`, `sid`, `refresh_jti` and `refresh_expires_at` (UTC epoch seconds).
+A successful login replaces this record with a new UUID v4 `sid`. Both signed
+AT and RT include that sid. Refresh preserves sid and atomically compares the
+current sid, RT jti and expiry before replacing the record and its absolute TTL.
+An unexpired RT can revoke its matching sid even after RT rotation; an older
+login cannot revoke the new session. Login and refresh commands are never retried.
+
+`SessionStore` is implemented by `RedisSessionStore` using `redis/session.lua`.
+Old `auth:refresh:*` keys are not read, and sidless tokens require login again.
+Auth implementation and tests are complete; BFF session checks and coordinated
+production rollout remain separate work. The shared contract and rollout steps
+are in the docs repository at `auth/implementation/SESSION_HANDOFF.md`.
+
 ## Schema
 
 Flyway runs on startup and applies `src/main/resources/db/migration` to the
@@ -87,7 +103,7 @@ Flyway runs on startup and applies `src/main/resources/db/migration` to the
 | `users` | Service user ID, editable display name (up to 50 characters), creation and update timestamps |
 | `oauth_identities` | Provider and provider account ID mapped to a user, with an optional email |
 
-OAuth login requests and refresh-token state are stored in Redis.
+OAuth login requests and per-user active sessions are stored in Redis.
 
 V1 is preserved because it has already been applied to the deployed database.
 V2 upgrades those empty tables to the current account schema: it removes
@@ -175,10 +191,11 @@ recorded test result.
 
 ```bash
 ./gradlew build
+AUTH_TEST_REDIS_IMAGE=valkey/valkey:9.0.6-alpine ./gradlew build
 ```
 
 Tests require Java 21 and Docker. Testcontainers creates disposable PostgreSQL 18.4
-and Redis instances on random ports, and Google responses come from an in-process
+and Redis 7.4 instances on random ports (or the image selected by `AUTH_TEST_REDIS_IMAGE`), and Google responses come from an in-process
 HTTP/JWK server. Tests generate their own RSA keys and do not require Google
 credentials or production connection settings. The first run downloads Gradle
 dependencies and container images.
@@ -194,7 +211,7 @@ empty V1 tables, including preservation of the V1 checksum.
 ```
 
 The full HTTP test covers preparation, callback, profile editing, repeat login,
-refresh and logout while preserving another device's token. Unit and adapter
+refresh and logout with one active session per user. Unit and adapter
 tests cover validation, database races, Redis command outcomes, time limits and
 error responses. ArchUnit enforces dependency boundaries: `domain` and
 `application` compiled classes depend only on core contracts and Java; `config`

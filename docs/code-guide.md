@@ -41,10 +41,19 @@
 2. 사용자가 Google 인증을 거부했다면 로그인 거부 오류를 반환한다.
 3. `oidcClient.exchange()`로 인증 코드를 교환하고 신원을 확인한다.
 4. `accountRegistration.register()`로 계정을 연결하고 DB 트랜잭션 완료를 기다린다.
-5. `jwtTokens.issue()`로 토큰을 발급하고 `refreshTokenStore.save()`로 RT 상태를 저장한다.
+5. 새 `sid`를 만들고 `jwtTokens.issue(userId, sid)`로 토큰을 서명한 뒤 `sessions.replace()`로 활성 세션을 교체한다.
+   저장 성공 확인 후에만 토큰을 반환한다.
 
 `OAuthRequests.consume()`는 입력 검사, 저장된 요청 조회·검증, 소비, 소비한 값의 재검증을
 순서대로 수행한다. 오류에 붙는 소비 상태는 재시도 판단에 영향을 주므로 이 경계를 유지한다.
+
+## 세션 갱신과 폐기
+
+`RefreshService`는 같은 sid의 새 토큰을 미리 서명한 뒤 `SessionStore.rotate()`를 호출한다.
+현재 sid·jti·만료가 일치할 때만 교체하고 결과가 확인돼야 반환한다.
+`RevokeService`는 미만료 RT와 같은 sid만 폐기하며, 제한된 재시도 때도 sid·만료를 유지한다.
+`RedisSessionStore`의 `redis/session.lua`는 조건을 검사한 뒤 최종 변경 한 번만 실행한다.
+명령 제한 500ms에는 연결 획득이 포함되고, 실행 전 취소와 실행 결과 미확인을 구분한다.
 
 ## 서버 시작 시 객체 구성
 
