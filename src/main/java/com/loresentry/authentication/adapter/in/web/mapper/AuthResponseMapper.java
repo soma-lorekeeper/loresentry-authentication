@@ -21,7 +21,7 @@ public interface AuthResponseMapper {
 
     AuthResponses.Profile profile(AccountUseCase.Profile profile);
 
-    @Mapping(target = ".", source = "tokens")
+    @Mapping(target = "sessionId", source = "sessionId.value")
     @Mapping(
             target = "loginRequestConsumed",
             source = "consumption",

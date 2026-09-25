@@ -20,13 +20,14 @@ class LoginCommitTest extends DatabaseTestSupport {
     @Autowired OAuthStateStore states;
     @Autowired RegisterIdentityUseCase accounts;
     @Autowired AccountStore accountStore;
-    @Autowired JwtTokens jwt;
-    @Autowired SessionStore refresh;
+    @Autowired SessionIdGenerator ids;
+    @Autowired org.springframework.data.redis.core.StringRedisTemplate redis;
+    @Autowired LoginSessionStore sessions;
 
     @Test
-    void committedAccountSurvivesRefreshSaveFailureAndReloginUsesSameUuid() {
+    void committedAccountSurvivesSessionSaveFailureAndReloginUsesSameUuid() {
         var provider = mock(OidcClient.class);
-        var broken = mock(SessionStore.class);
+        var broken = mock(LoginSessionStore.class);
         var identity =
                 new OidcClient.Identity(
                         "google", "commit-" + UUID.randomUUID(), "Name", "same@example.com");
@@ -36,7 +37,7 @@ class LoginCommitTest extends DatabaseTestSupport {
                 .thenReturn(URI.create("https://accounts.google.com/authorize"));
         when(provider.exchange(eq("code"), any())).thenReturn(identity);
         var requests = new OAuthRequests(states, provider, Clock.systemUTC(), new SecureRandom());
-        var login = new LoginService(requests, provider, accounts, jwt, broken);
+        var login = new LoginService(requests, provider, accounts, ids, broken);
         doAnswer(
                         call -> {
                             assertThat(accountStore.findByIdentity("google", identity.subject()))
@@ -67,14 +68,16 @@ class LoginCommitTest extends DatabaseTestSupport {
         UUID committed =
                 accountStore.findByIdentity("google", identity.subject()).orElseThrow().user().id();
         assertThat(states.find(prepared.loginRequestId())).isEmpty();
-        var retry = new LoginService(requests, provider, accounts, jwt, refresh);
+        var retry = new LoginService(requests, provider, accounts, ids, sessions);
         var next = retry.prepare();
         var nextState = states.find(next.loginRequestId()).orElseThrow();
         var result =
                 retry.callback(
                         new LoginUseCase.Callback(
                                 next.loginRequestId(), nextState.state(), "code", null));
-        assertThat(jwt.verifyRefresh(result.tokens().refreshToken(), false).userId())
-                .isEqualTo(committed);
+        assertThat(
+                        redis.opsForValue()
+                                .get("auth:session:{login}:by-id:" + result.sessionId().hash()))
+                .contains(committed.toString());
     }
 }

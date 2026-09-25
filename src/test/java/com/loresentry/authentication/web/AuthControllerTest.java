@@ -55,16 +55,20 @@ class AuthControllerTest {
                 .andExpect(header().doesNotExist("Set-Cookie"))
                 .andExpect(jsonPath("$.login_request_consumed").doesNotExist());
         when(login.callback(any()))
-                .thenReturn(new LoginUseCase.LoginResult(pair, AuthFailure.Consumption.CONSUMED));
+                .thenReturn(
+                        new LoginUseCase.LoginResult(
+                                new com.loresentry.authentication.domain.SessionId("A".repeat(43)),
+                                rtExpiry,
+                                AuthFailure.Consumption.CONSUMED));
         mvc.perform(
                         post("/auth/oauth/google/callback")
                                 .contentType("application/json")
                                 .content(
                                         "{\"login_request_id\":\"request\",\"state\":\"state\",\"code\":\"code\"}"))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.length()").value(5))
-                .andExpect(jsonPath("$.access_token").value("access"))
-                .andExpect(jsonPath("$.refresh_expires_at").value(rtExpiry.toString()))
+                .andExpect(jsonPath("$.length()").value(3))
+                .andExpect(jsonPath("$.session_id").value("A".repeat(43)))
+                .andExpect(jsonPath("$.expires_at").value(rtExpiry.toString()))
                 .andExpect(jsonPath("$.login_request_consumed").value(true))
                 .andExpect(header().string("Cache-Control", "no-store"))
                 .andExpect(header().doesNotExist("Set-Cookie"));
@@ -99,20 +103,25 @@ class AuthControllerTest {
     @CsvSource(
             value = {"CONSUMED,true", "NOT_CONSUMED,false", "UNKNOWN,NULL"},
             nullValues = "NULL")
-    void callbackMapsNestedTokensAndAllConsumptionStates(
+    void callbackMapsSessionAndAllConsumptionStates(
             AuthFailure.Consumption consumption, Boolean expected) throws Exception {
-        when(login.callback(any())).thenReturn(new LoginUseCase.LoginResult(pair, consumption));
+        when(login.callback(any()))
+                .thenReturn(
+                        new LoginUseCase.LoginResult(
+                                new com.loresentry.authentication.domain.SessionId("A".repeat(43)),
+                                rtExpiry,
+                                consumption));
         mvc.perform(
                         post("/auth/oauth/google/callback")
                                 .contentType("application/json")
                                 .content(
                                         "{\"login_request_id\":\"request\",\"state\":\"state\",\"code\":\"code\"}"))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.length()").value(5))
-                .andExpect(jsonPath("$.access_token").value("access"))
-                .andExpect(jsonPath("$.access_expires_at").value(atExpiry.toString()))
-                .andExpect(jsonPath("$.refresh_token").value("refresh"))
-                .andExpect(jsonPath("$.refresh_expires_at").value(rtExpiry.toString()))
+                .andExpect(jsonPath("$.length()").value(3))
+                .andExpect(jsonPath("$.session_id").value("A".repeat(43)))
+                .andExpect(jsonPath("$.access_token").doesNotExist())
+                .andExpect(jsonPath("$.refresh_token").doesNotExist())
+                .andExpect(jsonPath("$.expires_at").value(rtExpiry.toString()))
                 .andExpect(
                         jsonPath("$.login_request_consumed")
                                 .value(org.hamcrest.Matchers.equalTo(expected)));
@@ -276,14 +285,18 @@ class AuthControllerTest {
     @Test
     void callbackAcceptsExplicitNullAlternativeAndProviderDenial() throws Exception {
         when(login.callback(any()))
-                .thenReturn(new LoginUseCase.LoginResult(pair, AuthFailure.Consumption.UNKNOWN));
+                .thenReturn(
+                        new LoginUseCase.LoginResult(
+                                new com.loresentry.authentication.domain.SessionId("A".repeat(43)),
+                                rtExpiry,
+                                AuthFailure.Consumption.UNKNOWN));
         mvc.perform(
                         post("/auth/oauth/google/callback")
                                 .contentType("application/json")
                                 .content(
                                         "{\"login_request_id\":\"id\",\"state\":\"state\",\"code\":\"code\",\"error\":null}"))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.length()").value(5))
+                .andExpect(jsonPath("$.length()").value(3))
                 .andExpect(
                         jsonPath("$.login_request_consumed")
                                 .value(org.hamcrest.Matchers.nullValue()));

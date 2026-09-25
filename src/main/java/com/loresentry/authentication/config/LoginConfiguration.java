@@ -1,5 +1,6 @@
 package com.loresentry.authentication.config;
 
+import com.loresentry.authentication.adapter.out.id.SecureSessionIds;
 import com.loresentry.authentication.application.port.in.*;
 import com.loresentry.authentication.application.port.out.*;
 import com.loresentry.authentication.application.service.*;
@@ -17,12 +18,17 @@ public class LoginConfiguration {
     }
 
     @Bean
+    SessionIdGenerator sessionIds() {
+        return new SecureSessionIds();
+    }
+
+    @Bean
     LoginUseCase login(
             OAuthRequests requests,
             OidcClient provider,
             RegisterIdentityUseCase accounts,
-            JwtTokens jwt,
-            SessionStore sessions) {
-        return new LoginService(requests, provider, accounts, jwt, sessions);
+            SessionIdGenerator ids,
+            LoginSessionStore sessions) {
+        return new LoginService(requests, provider, accounts, ids, sessions);
     }
 }

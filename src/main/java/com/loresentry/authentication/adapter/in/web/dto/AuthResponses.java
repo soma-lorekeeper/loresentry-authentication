@@ -32,10 +32,8 @@ public final class AuthResponses {
 
     @JsonInclude(JsonInclude.Include.ALWAYS)
     public record Callback(
-            @JsonProperty("access_token") String accessToken,
-            @JsonProperty("access_expires_at") Instant accessExpiresAt,
-            @JsonProperty("refresh_token") String refreshToken,
-            @JsonProperty("refresh_expires_at") Instant refreshExpiresAt,
+            @JsonProperty("session_id") String sessionId,
+            @JsonProperty("expires_at") Instant expiresAt,
             @JsonProperty("login_request_consumed") Boolean loginRequestConsumed) {
         @Override
         public String toString() {

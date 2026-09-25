@@ -22,8 +22,8 @@ import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
 @Import(HttpAuthTestSupport.GoogleHttpConfiguration.class)
 class FailureRegressionTest extends HttpAuthTestSupport {
     @MockitoSpyBean RedisOAuthStateStore stateAdapter;
-    @MockitoSpyBean JwtTokens jwtAdapter;
-    @MockitoSpyBean RedisSessionStore tokenAdapter;
+    @MockitoSpyBean SessionIdGenerator idGenerator;
+    @MockitoSpyBean RedisLoginSessionStore sessionAdapter;
     @MockitoSpyBean JpaAccountStore accountAdapter;
     @Autowired StringRedisTemplate redis;
 
@@ -46,14 +46,14 @@ class FailureRegressionTest extends HttpAuthTestSupport {
                 .findByIdentity("google", subject);
         var results = concurrent(List.of(() -> callback(first), () -> callback(second)));
         assertThat(results).allSatisfy(r -> assertThat(r.status()).isEqualTo(200));
-        var user = jwt.verifyRefresh(rt(results.getFirst()), false).userId();
-        assertThat(jwt.verifyRefresh(rt(results.getLast()), false).userId()).isEqualTo(user);
+        var user = userOf(results.getFirst());
+        assertThat(userOf(results.getLast())).isEqualTo(user);
         assertThat(accounts.findByIdentity("google", subject).orElseThrow().user().id())
                 .isEqualTo(user);
     }
 
     @Test
-    void simultaneousCallbacksAndRefreshesEachHaveExactlyOneWinner() throws Exception {
+    void simultaneousCallbacksHaveExactlyOneWinner() throws Exception {
         var pending = pending("callback-" + UUID.randomUUID());
         int callsBefore = google.tokenCalls.get();
         var callbacks = concurrent(Collections.nCopies(5, () -> callback(pending)));
@@ -64,14 +64,6 @@ class FailureRegressionTest extends HttpAuthTestSupport {
                 assertThat(result.body().get("login_request_consumed").booleanValue()).isFalse();
             }
         assertThat(google.tokenCalls.get() - callsBefore).isEqualTo(1);
-        var token = rt(callbacks.stream().filter(r -> r.status() == 200).findFirst().orElseThrow());
-        var refreshes = concurrent(Collections.nCopies(5, () -> refresh(token)));
-        assertThat(refreshes.stream().filter(r -> r.status() == 200).count()).isEqualTo(1);
-        for (var result : refreshes)
-            if (result.status() != 200) error(result, 401, "REFRESH_REJECTED", "RELOGIN");
-        // The winning response is deliberately discarded; retrying the previous RT cannot recover
-        // it.
-        error(refresh(token), 401, "REFRESH_REJECTED", "RELOGIN");
     }
 
     @Test
@@ -96,79 +88,56 @@ class FailureRegressionTest extends HttpAuthTestSupport {
         var subject = "commit-http-" + UUID.randomUUID();
         var pending = pending(subject);
         doThrow(unavailable(PortFailure.Execution.UNKNOWN))
-                .when(tokenAdapter)
+                .when(sessionAdapter)
                 .replace(any(), any());
         var failed = callback(pending);
         error(failed, 503, "LOGIN_UNAVAILABLE", "RESTART_LOGIN");
         assertThat(failed.body().get("login_request_consumed").booleanValue()).isTrue();
         var committed = accounts.findByIdentity("google", subject).orElseThrow().user().id();
-        reset(tokenAdapter);
-        assertThat(jwt.verifyRefresh(rt(login(subject)), false).userId()).isEqualTo(committed);
+        reset(sessionAdapter);
+        assertThat(userOf(login(subject))).isEqualTo(committed);
     }
 
     @Test
-    void refreshFailuresDistinguishNotExecutedFromLostRotationResponse() {
-        var initial = login("refresh-fail-" + UUID.randomUUID());
-        var token = rt(initial);
-        var claims = jwt.verifyRefresh(token, false);
-        var key = "auth:session:" + claims.userId();
-        var before = redis.opsForValue().get(key);
-        doThrow(unavailable(PortFailure.Execution.NOT_EXECUTED))
-                .when(tokenAdapter)
-                .rotate(eq(claims.userId()), any(), any());
-        error(refresh(token), 503, "REFRESH_UNAVAILABLE", "RETRY_LATER");
-        assertThat(redis.opsForValue().get(key)).isEqualTo(before);
+    void lostLoginResponseIsNotReplayedAndCommittedAccountSurvives() {
+        var subject = "lost-response-" + UUID.randomUUID();
         doAnswer(
                         call -> {
-                            assertThat((Boolean) call.callRealMethod()).isTrue();
+                            call.callRealMethod();
                             throw unavailable(PortFailure.Execution.UNKNOWN);
                         })
-                .when(tokenAdapter)
-                .rotate(eq(claims.userId()), any(), any());
-        error(refresh(token), 503, "REFRESH_OUTCOME_UNKNOWN", "RELOGIN");
-        assertThat(redis.opsForValue().get(key)).isNotNull().isNotEqualTo(before);
-        verify(tokenAdapter, times(2)).rotate(eq(claims.userId()), any(), any());
-        reset(tokenAdapter);
-        error(refresh(token), 401, "REFRESH_REJECTED", "RELOGIN");
+                .when(sessionAdapter)
+                .replace(any(), any());
+        var response = callback(pending(subject));
+        error(response, 503, "LOGIN_UNAVAILABLE", "RESTART_LOGIN");
+        assertThat(response.body().has("session_id")).isFalse();
+        var user = accounts.findByIdentity("google", subject).orElseThrow().user().id();
+        assertThat(redis.opsForValue().get("auth:session:{login}:by-user:" + user)).isNotNull();
+        verify(sessionAdapter, times(1)).replace(eq(user), any());
     }
 
     @Test
     @org.junit.jupiter.api.extension.ExtendWith(
             org.springframework.boot.test.system.OutputCaptureExtension.class)
-    void signingAndCorruptStateFailuresAreInternalAndNeverExposeSecrets(
+    void generationAndCorruptStateFailuresNeverExposeSecrets(
             org.springframework.boot.test.system.CapturedOutput output) {
         var subject = "internal-" + UUID.randomUUID();
         var initial = login(subject);
-        var claims = jwt.verifyRefresh(rt(initial), false);
-        var key = "auth:session:" + claims.userId();
+        var user = userOf(initial);
+        var key = "auth:session:{login}:by-user:" + user;
         var before = redis.opsForValue().get(key);
-        doThrow(
-                        new PortFailure(
-                                PortFailure.Kind.UNAVAILABLE,
-                                PortFailure.Execution.NOT_EXECUTED,
-                                false))
-                .when(jwtAdapter)
-                .issue(any(), any());
-        var failedLogin = callback(pending(subject));
-        error(failedLogin, 500, "INTERNAL_ERROR", "NONE");
-        assertThat(failedLogin.body().get("login_request_consumed").booleanValue()).isTrue();
-        error(refresh(rt(initial)), 500, "INTERNAL_ERROR", "NONE");
+        doThrow(new IllegalStateException("private-generator-detail")).when(idGenerator).generate();
+        error(callback(pending(subject)), 500, "INTERNAL_ERROR", "NONE");
         assertThat(redis.opsForValue().get(key)).isEqualTo(before);
-        reset(jwtAdapter);
+        reset(idGenerator);
         redis.opsForValue().set(key, "corrupt-session-secret");
-        error(refresh(rt(initial)), 500, "INTERNAL_ERROR", "NONE");
-        error(
-                call("POST", "/auth/tokens/revoke", Map.of("refresh_token", rt(initial)), null),
-                500,
-                "INTERNAL_ERROR",
-                "NONE");
-        verify(tokenAdapter, times(1)).revoke(claims.userId(), claims.sid(), claims.expiresAt());
+        error(callback(pending(subject)), 503, "LOGIN_UNAVAILABLE", "RESTART_LOGIN");
         assertThat(redis.opsForValue().get(key)).isEqualTo("corrupt-session-secret");
         assertThat(output.getAll())
                 .doesNotContain(
+                        "private-generator-detail",
                         "corrupt-session-secret",
-                        rt(initial),
-                        initial.body().get("access_token").asString());
+                        initial.body().get("session_id").asString());
     }
 
     @Test
@@ -176,15 +145,15 @@ class FailureRegressionTest extends HttpAuthTestSupport {
         for (var execution :
                 List.of(PortFailure.Execution.NOT_EXECUTED, PortFailure.Execution.UNKNOWN)) {
             var subject = "login-port-" + UUID.randomUUID();
-            doThrow(unavailable(execution)).when(tokenAdapter).replace(any(), any());
+            doThrow(unavailable(execution)).when(sessionAdapter).replace(any(), any());
             var result = callback(pending(subject));
             error(result, 503, "LOGIN_UNAVAILABLE", "RESTART_LOGIN");
             assertThat(result.body().get("login_request_consumed").booleanValue()).isTrue();
             assertThat(result.headers().firstValue("Cache-Control")).contains("no-store");
-            reset(tokenAdapter);
+            reset(sessionAdapter);
         }
         doThrow(new IllegalStateException("private-token-detail"))
-                .when(tokenAdapter)
+                .when(sessionAdapter)
                 .replace(any(), any());
         var result = callback(pending("login-defect-" + UUID.randomUUID()));
         error(result, 500, "INTERNAL_ERROR", "NONE");
@@ -239,26 +208,14 @@ class FailureRegressionTest extends HttpAuthTestSupport {
         assertThat(states.find(next.id())).isEmpty();
     }
 
-    @Test
-    void failedRevocationReportsUnconfirmedAndDoesNotDeleteAnotherDevice() {
-        var subject = "revoke-fail-" + UUID.randomUUID();
-        var first = login(subject);
-        var second = login(subject);
-        var token = rt(first);
-        var claims = jwt.verifyRefresh(token, false);
-        var before = redis.opsForValue().get("auth:session:" + claims.userId());
-        doThrow(unavailable(PortFailure.Execution.UNKNOWN))
-                .when(tokenAdapter)
-                .revoke(claims.userId(), claims.sid(), claims.expiresAt());
-        error(
-                call("POST", "/auth/tokens/revoke", Map.of("refresh_token", token), null),
-                503,
-                "REVOCATION_UNCONFIRMED",
-                "NONE");
-        verify(tokenAdapter, times(3)).revoke(claims.userId(), claims.sid(), claims.expiresAt());
-        assertThat(redis.opsForValue().get("auth:session:" + claims.userId())).isEqualTo(before);
-        reset(tokenAdapter);
-        assertThat(refresh(rt(second)).status()).isEqualTo(200);
+    private UUID userOf(Result response) {
+        var id =
+                new com.loresentry.authentication.domain.SessionId(
+                        response.body().get("session_id").asString());
+        return UUID.fromString(
+                mapper.readTree(redis.opsForValue().get("auth:session:{login}:by-id:" + id.hash()))
+                        .get("user_id")
+                        .asString());
     }
 
     private PortFailure unavailable(PortFailure.Execution execution) {
