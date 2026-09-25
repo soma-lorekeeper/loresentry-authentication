@@ -14,7 +14,7 @@ Google 토큰은 로그인 검증 중에만 사용하고 장기 저장·offline 
 
 Redis 키는 `auth:oauth:{login_request_id}`이며, 기존 요청을 덮어쓰지 않고 TTL 300초로 생성한다.
 식별자·state·nonce·PKCE 값의 생성과 JSON 저장 형식은 [직렬화 계약](../implementation/IMPLEMENTATION_NOTES.md#oauth-상태-직렬화)을 따른다.
-상태 원문과 비밀 값은 로그에 남기지 않으며, 임시 상태 만료에는 JWT의 시계 오차 허용을 적용하지 않는다.
+상태 원문과 비밀 값은 로그에 남기지 않으며, 임시 상태 만료에는 시계 오차 유예를 추가하지 않는다.
 
 ## 콜백 검증과 소비
 
@@ -23,7 +23,7 @@ Redis 키는 `auth:oauth:{login_request_id}`이며, 기존 요청을 덮어쓰�
 2. 확인된 키를 `GETDEL`로 소비한다. 반환된 상태에도 같은 검증을 적용하며, 이미 없으면 거절한다.
    앞의 조회가 여러 요청에서 성공하더라도 소비는 한 요청만 성공할 수 있다.
 3. 성공 콜백은 저장한 `code_verifier`로 코드를 교환한다. Google ID Token의 서명·발급자·사용 대상·만료와
-   `nonce`를 검증한 뒤에만 계정 정보를 사용한다. ID Token의 사용 대상은 Loresentry AT의 `aud`가 아니라 Google Client ID다.
+   `nonce`를 검증한 뒤에만 계정 정보를 사용한다. ID Token의 사용 대상은 Google Client ID다.
 4. 취소·거절 콜백도 브라우저 연결과 `state`를 확인한 뒤 소비한다. 소비 후 실패한 상태는 복구하지 않는다.
 
 서명 검증과 OIDC 표준 검증은 Spring Security를 사용하고, 저장한 요청의 `nonce` 검증을 명시적으로 연결한다.

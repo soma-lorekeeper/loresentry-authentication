@@ -1,5 +1,7 @@
 # loresentry-authentication
 
+> 2026-09-26: docs/는 단일 세션 ID와 마지막 활동 후 14일 만료·활동 시 연장 설계로 전환했다. 코드는 아직 이전 방식이며 아래 실행 안내·설정·검증 수치는 현재 코드 기준이다. [새 설계와 전환 범위](docs/README.md)를 먼저 확인한다.
+
 Authentication service for Lore Sentry.
 
 Handles the Google-based sign-in flow, user account and display name data, and

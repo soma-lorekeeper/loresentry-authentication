@@ -1,7 +1,8 @@
 # Auth 구현 노트
 
-현재 Auth 구현의 라이브러리·매핑·설정과 참고 설명을 모았다.
-동작과 실패 정책은 각 설계 문서를 기준으로 하며, 코드와 계약의 차이는 해당 항목에 기록한다.
+2026-09-26 목표 세션 계약과 유지할 계정·OAuth 구현 경계를 정리한다.
+세션 관련 코드는 아직 전환하지 않았다. 현재 클래스 이름이 언급된 계정·OAuth 항목과
+새로 구현할 세션 계약을 구분한다.
 
 ## 오류 처리
 
@@ -22,8 +23,8 @@ catch는 예외 변환, 정해진 복구·재시도 또는 처리 상태 보존�
 ### 처리 상태 보존
 
 Redis 타임아웃만 보고 전역 핸들러가 실패 단계를 추측하지 않는다.
-세션 갱신 명령 미실행 확인과 결과 미확인을 포트와 서비스에서 구별해 전달한다.
-갱신은 조건부 교체 한 번이며 별도 저장 실패 단계는 없다. 서명·손상된 레코드 오류는 500이다.
+세션 생성·폐기 명령의 미실행 확인과 결과 미확인을 포트와 서비스에서 구별해 전달한다.
+로그인의 손상 레코드·내부 결함과 폐기 미확인은 각 API의 오류 계약을 따른다.
 명령 미실행을 증명할 수 없으면 미실행으로 취급하지 않는다.
 OAuth 콜백도 예외 전달 과정에서 소비 상태를 보존하고, 응답의 `login_request_consumed`에 반영한다.
 미확인 값을 임의로 `false`로 바꾸지 않으며, 다른 API에는 해당 필드를 넣지 않는다.
@@ -59,7 +60,7 @@ Spring MVC의 예외 처리 범위는 [공식 문서](https://docs.spring.io/spr
 
 운영 테이블이 비어 있다는 확인을 바탕으로 V2는 다음 변경을 수행한다.
 
-- 사용하지 않는 `auth_sessions`를 제거한다. 활성 세션과 RT 메타데이터는 Redis에 저장한다.
+- 사용하지 않는 `auth_sessions`를 제거한다. 활성 세션은 Redis에 저장한다.
 - `users`의 `google_subject`·`email`·`status`를 제거하고 표시 이름 길이를 50자로 맞춘다.
 - 사용자 ID·생성 시각·수정 시각의 DB 기본값을 제거한다. 현재 애플리케이션이 값을 생성한다.
 - `oauth_identities`와 복합 PK, 사용자 FK·인덱스를 생성한다.
@@ -118,8 +119,8 @@ UUID와 복합 키를 저장 전에 할당하므로, 신규 생성은 `AccountTr
   `AccountEntityMapper`가 JPA 엔티티와 코어 모델을 변환한다. 누락된 대상 필드는 컴파일 오류로 처리한다.
 - 단순 생성자 주입은 Lombok으로 생성한다. 코어의 컴파일 결과에 프레임워크 의존이 생기지 않는지는
   ArchUnit으로 검증한다. 초기화 로직이 있는 생성자는 직접 작성한다.
-- `JwtProperties`·`GoogleProperties`는 `@ConfigurationProperties`로 설정을 바인딩하고
-  필수 값을 검증한다. 기존 환경변수 이름, RSA 키 검증과 콜백 URL 제한은 유지한다.
+- `GoogleProperties`의 `@ConfigurationProperties` 바인딩과 필수 값·콜백 URL 검증을 유지한다.
+  세션 비활동 제한과 저장소 설정은 새 계약에 맞게 바인딩·검증한다.
 
 ### 공식 참고
 
@@ -137,17 +138,6 @@ Java 21에서는 `com.fasterxml.uuid:java-uuid-generator:5.2.0`을 사용한다.
 라이브러리의 UUID v7 생성 API와 Java 지원 범위는
 [JUG 공식 문서](https://github.com/cowtowncoder/java-uuid-generator)와
 [5.2.0 릴리스 기록](https://github.com/cowtowncoder/java-uuid-generator/blob/java-uuid-generator-5.2.0/release-notes/VERSION)에서 확인했다.
-
-## JWT 키 설정
-
-로컬 개발에서는 Auth 개인키를 환경변수로 주입한다.
-키는 RSA 2048비트로 생성한다. `AUTH_JWT_PRIVATE_KEY_BASE64`에는 암호화되지 않은 PKCS#8 DER의
-표준 Base64 문자열을 한 줄로 넣는다. Base64는 전달 인코딩이며 암호화가 아니다.
-`AUTH_JWT_KEY_ID`는 키 생성 시 함께 만든 UUID v4 문자열로 고정하고, 재시작 때 새로 만들지 않는다.
-
-Auth와 BFF는 `AUTH_JWT_KEY_ID`와 `AUTH_JWT_PUBLIC_KEY_PATH`로 검증 키를 설정한다.
-공개키 파일은 X.509 SubjectPublicKeyInfo PEM(`BEGIN PUBLIC KEY`) 형식이다.
-키 로딩·교체 정책은 [JWT 설계](../token/JWT_DESIGN.md#공개키-전달)를 따른다.
 
 ## OAuth 요청 설정
 
@@ -172,19 +162,16 @@ Auth의 `GoogleSettings`와 [BFF 로그인 계약](../../../loresentry-gateway/d
 
 ## 활성 세션 저장과 명령 경계
 
-`SessionStore.Session`은 UUID v4 sid·refreshJti와 초 정밀도의 미래 만료용 값을 표현한다.
-실제 미래 여부는 Lua가 `TIME`으로 검사한다. `RedisSessionStore`는 검증된 UUID·정수를
-네 필드의 UTF-8 JSON으로 직렬화하고 `auth:session:{userId}` 하나만 변경한다.
-Lua는 미지원 버전·필드 누락·잘못된 형식·Redis 자료형 오류를 `INVALID_DATA`로 반환한다.
+[세션 계약](../session/SESSION_DESIGN.md)의 두 인덱스·JSON·TTL을 사용한다.
+Auth는 난수 ID 생성·해시·원자적 로그인 교체·조건부 폐기를 구현한다.
+BFF는 사전 조회와 원자적 검증·TTL 연장을 구현한다. 원문 ID는 저장하지 않는다.
+입력·기존 자료형 검증은 쓰기 전에 수행하고 Lua 런타임 오류의 부분 쓰기를 검증한다.
 
-어댑터는 가상 스레드에서 연결 획득부터 명령 실행까지 500ms로 제한한다.
-연결 획득 중 취소가 먼저 확정되면 이후 연결이 돌아와도 EVAL을 호출하지 않아 `NOT_EXECUTED`다.
-실행에 진입한 뒤 응답을 확인하지 못하면 `UNKNOWN`이다. 새로 연결해 같은 명령을 자동 재전송하지 않는다.
-Lettuce는 끊어진 연결의 명령을 거절하고 재연결 시 기존 명령 replay를 막는다.
-
-세션 명령은 `EVAL`, 스크립트 내부 `TIME`·`GET`·`SET`·`DEL`이다.
-OAuth의 `SET NX`·`GET`·`GETDEL`은 별도 포트에 남는다. 운영 ACL과 클라이언트 초기화 명령은
-[전환 인계](../../../docs/auth/implementation/SESSION_HANDOFF.md)에서 확인한다. 테스트 실행 기록은 [테스트 계획](TEST_PLAN.md#실행-결과)을 따른다.
+저장소 연산의 초기 예산은 연결 획득 포함 500ms다. BFF는 사전 조회와 스크립트 전체에
+하나의 예산을 사용한다. 명령 실행에 들어간 뒤 응답을 받지 못하면 결과 불명으로 분류한다.
+재연결의 명령 replay와 자동 재전송을 끄고 조건부 폐기에만 계약의 제한적 재시도를 적용한다.
+BFF의 TTL 변경 권한과 Auth의 생성·폐기 권한을 구분하고 실제 드라이버로 ACL을 검증한다.
+[공동 인계](../../../docs/auth/implementation/SESSION_HANDOFF.md)를 따른다.
 
 ## OAuth 상태 직렬화
 
@@ -223,19 +210,3 @@ Spring Security의 요청 객체는 이 DTO와 서버 설정으로 재구성한�
 - [OAuth 보안 권고](https://www.rfc-editor.org/rfc/rfc9700.html#section-2.1.1): 서버형 클라이언트에도 PKCE 권고.
 - [Spring Data Redis 직렬화](https://docs.spring.io/spring-data/redis/reference/redis/template.html): JSON과 Java 직렬화의 차이.
 - [Spring Security nonce 검증](https://github.com/spring-projects/spring-security/blob/main/oauth2/oauth2-client/src/main/java/org/springframework/security/oauth2/client/oidc/authentication/OidcAuthorizationCodeAuthenticationProvider.java): 원본 nonce 속성을 복원해야 해시 검증이 수행됨.
-
-## HS256과 RS256의 키 구조
-
-두 방식 모두 SHA-256을 사용하지만, 토큰을 생성하고 검증할 때 사용하는 키 구조가 다르다.
-
-| 구분 | 기존 HS256 | 채택한 RS256 |
-|---|---|---|
-| 방식 | HMAC + SHA-256 | RSA 서명 + SHA-256 |
-| Auth의 토큰 생성 | 공유 비밀키 사용 | 개인키 사용 |
-| BFF의 AT 검증 | 동일한 공유 비밀키 사용 | 공개키 사용 |
-| BFF의 검증 키로 유효한 서명 생성 | 가능 | 불가능 |
-
-HS256은 검증 서버에도 토큰을 만들 수 있는 비밀키를 공유해야 한다.
-RS256을 선택하면 Auth만 개인키를 보유하고 BFF에는 공개키만 전달해,
-토큰 발급과 검증의 키 권한을 분리할 수 있다.
-두 방식은 JWT의 위조·변조 여부를 검증하는 용도이며, 토큰 내용을 암호화하지 않는다.

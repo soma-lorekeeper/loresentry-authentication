@@ -1,5 +1,8 @@
 # Auth 서버 코드 읽기
 
+2026-09-26 세션 설계 전환으로 로그인 완료·인증 세션 부분은 코드와 목표 계약이 다르다.
+아래는 현재 코드에서 유지할 OAuth·계정 경계를 읽는 안내이며 새 세션 구현 완료를 뜻하지 않는다.
+
 요청 흐름은 컨트롤러에서 시작하고, 객체를 어떻게 만들고 연결하는지 궁금할 때는
 `config`를 읽는다. 요청 처리와 서버 시작 시 초기화를 구분해서 따라간다.
 
@@ -12,9 +15,9 @@
 | `adapter/in/web` | HTTP 요청 수신, 응답과 오류 반환 |
 | `adapter/in/web/dto`, `mapper` | HTTP 데이터 형식과 애플리케이션 입출력 사이의 변환 |
 | `application/port/in` | 애플리케이션이 외부에 제공하는 기능의 계약 |
-| `application/service` | 로그인·토큰·계정 처리 순서와 애플리케이션 내부 협력 |
-| `application/port/out` | 외부 인증·저장소·토큰 발급 등에 필요한 계약 |
-| `adapter/out` | Google, Redis, DB, JWT 등의 실제 구현 |
+| `application/service` | 로그인·세션·계정 처리 순서와 애플리케이션 내부 협력 |
+| `application/port/out` | 외부 인증·저장소·세션 생성 등에 필요한 계약 |
+| `adapter/out` | Google, Redis, DB 등의 외부 연동 |
 | `domain` | 사용자·외부 계정과 핵심 규칙 |
 | `config` | 설정값을 받아 객체를 생성하고 Spring 빈으로 연결 |
 
@@ -41,19 +44,18 @@
 2. 사용자가 Google 인증을 거부했다면 로그인 거부 오류를 반환한다.
 3. `oidcClient.exchange()`로 인증 코드를 교환하고 신원을 확인한다.
 4. `accountRegistration.register()`로 계정을 연결하고 DB 트랜잭션 완료를 기다린다.
-5. 새 `sid`를 만들고 `jwtTokens.issue(userId, sid)`로 토큰을 서명한 뒤 `sessions.replace()`로 활성 세션을 교체한다.
-   저장 성공 확인 후에만 토큰을 반환한다.
+5. 이후의 로그인 완료 단계는 [새 세션 계약](session/SESSION_DESIGN.md#로그인)에 맞춰
+   구현을 교체해야 한다. 현재 코드의 세션 발급 결과를 새 API 응답으로 해석하지 않는다.
 
 `OAuthRequests.consume()`는 입력 검사, 저장된 요청 조회·검증, 소비, 소비한 값의 재검증을
 순서대로 수행한다. 오류에 붙는 소비 상태는 재시도 판단에 영향을 주므로 이 경계를 유지한다.
 
-## 세션 갱신과 폐기
+## 세션 구현 전환
 
-`RefreshService`는 같은 sid의 새 토큰을 미리 서명한 뒤 `SessionStore.rotate()`를 호출한다.
-현재 sid·jti·만료가 일치할 때만 교체하고 결과가 확인돼야 반환한다.
-`RevokeService`는 미만료 RT와 같은 sid만 폐기하며, 제한된 재시도 때도 sid·만료를 유지한다.
-`RedisSessionStore`의 `redis/session.lua`는 조건을 검사한 뒤 최종 변경 한 번만 실행한다.
-명령 제한 500ms에는 연결 획득이 포함되고, 실행 전 취소와 실행 결과 미확인을 구분한다.
+현재 SessionStore·RedisSessionStore의 저장 형식·연산은 새 계약과 다르다.
+Auth는 ID 생성·두 인덱스 생성/교체·조건부 폐기로, BFF는 ID 검증·활동 TTL 연장으로
+전환해야 한다. 기존 코드의 클래스·메서드가 새 설계대로 동작한다고 가정하지 않는다.
+[구현 노트](implementation/IMPLEMENTATION_NOTES.md#활성-세션-저장과-명령-경계)를 따른다.
 
 ## 서버 시작 시 객체 구성
 
