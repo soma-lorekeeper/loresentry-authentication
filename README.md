@@ -1,11 +1,11 @@
 # loresentry-authentication
 
-> 2026-09-26: docs/는 단일 세션 ID와 마지막 활동 후 14일 만료·활동 시 연장 설계로 전환했다. 코드는 아직 이전 방식이며 아래 실행 안내·설정·검증 수치는 현재 코드 기준이다. [새 설계와 전환 범위](docs/README.md)를 먼저 확인한다.
+> 2026-09-26: 단일 세션 ID 로그인·폐기를 구현했다. 마지막 인증 활동 후 14일 만료하며 BFF가 활동 시 연장한다. 실제 브라우저·운영 전환 검증은 후속 작업이다.
 
 Authentication service for Lore Sentry.
 
 Handles the Google-based sign-in flow, user account and display name data, and
-authentication session/token logic used by the Gateway/BFF.
+authentication session logic used by the Gateway/BFF.
 
 See the [documentation index](docs/README.md) for Auth contracts, implementation
 and verification, and the [code reading guide](docs/code-guide.md) for package
@@ -41,15 +41,14 @@ Boot 4 moved several test annotations. The one this repo uses is
 ## Endpoints
 
 The `/auth` APIs are internal calls from the BFF. The BFF owns browser cookies,
-CSRF, CORS, access-token verification and per-request active-session checks. Account calls trust its `X-User-Id`
+CSRF, CORS, per-request session verification and inactivity expiration renewal. Account calls trust its `X-User-Id`
 header, so the deployment must keep this service unreachable from the internet.
 
 | Method | Path | Result |
 | --- | --- | --- |
 | `POST` | `/auth/oauth/google/prepare` | Google authorization URL and five-minute login request |
-| `POST` | `/auth/oauth/google/callback` | Verified Google identity mapped to a service account and tokens |
-| `POST` | `/auth/tokens/refresh` | Atomically rotate the current session RT and return a new AT/RT pair |
-| `POST` | `/auth/tokens/revoke` | Conditionally revoke the supplied RT session; return an empty `204` |
+| `POST` | `/auth/oauth/google/callback` | Verified Google identity mapped to an account, session ID and expiry |
+| `POST` | `/auth/sessions/revoke` | Conditionally revoke the supplied session ID; return an empty `204` |
 | `GET` | `/auth/users/me` | Account profile identified by `X-User-Id` |
 | `PATCH` | `/auth/users/me` | Change `display_name` only |
 | `GET` | `/health` | Process health |
@@ -58,7 +57,7 @@ header, so the deployment must keep this service unreachable from the internet.
 
 Request and response fields use snake case. Errors contain `code`, `message` and
 `next_action`. Only callback responses include `login_request_consumed`; a null
-value means that consumption could not be confirmed. Token responses use
+value means that consumption could not be confirmed. Authentication responses use
 `Cache-Control: no-store`. The API contract is maintained in this repository at
 [docs/INTERNAL_API.md](docs/INTERNAL_API.md).
 
@@ -70,7 +69,7 @@ the domain and retain the `INVALID_DISPLAY_NAME` error.
 
 MapStruct maps callback request DTOs to service inputs through `AuthRequestMapper`
 and service results to response DTOs through `AuthResponseMapper`. The response
-mapper flattens callback tokens and calls an explicit Java method to convert
+mapper flattens the callback session ID and calls an explicit Java method to convert
 consumption into `true`, `false` or `null`. Unmapped target fields fail compilation.
 After `./gradlew compileJava`, generated mappers are available under
 `build/generated/sources/annotationProcessor/java/main/`.
@@ -82,20 +81,16 @@ still use the entities' dedicated methods.
 
 ## Single active session
 
-Each user has one `auth:session:{userId}` String containing JSON fields
-`schema_version`, `sid`, `refresh_jti` and `refresh_expires_at` (UTC epoch seconds).
-A successful login replaces this record with a new UUID v4 `sid`. Both signed
-AT and RT include that sid. Refresh preserves sid and atomically compares the
-current sid, RT jti and expiry before replacing the record and its absolute TTL.
-An unexpired RT can revoke its matching sid even after RT rotation; an older
-login cannot revoke the new session. Login and refresh commands are never retried.
+Each login generates a canonical 32-byte random session ID. Redis stores its SHA-256
+hash in `auth:session:{login}:by-id:<hash>` and the current hash in
+`auth:session:{login}:by-user:<uuid>`. Both records expire together 14 days after
+login or the last successfully authenticated activity. A new login replaces the
+current user index. An older login cannot revoke the new session.
 
-`SessionStore` is implemented by `RedisSessionStore` using `redis/session.lua`.
-Old `auth:refresh:*` keys are not read, and sidless tokens require login again.
-Auth implementation and tests are complete; BFF session checks and coordinated
-production rollout remain separate work. The [session contract](docs/token/SINGLE_SESSION_DESIGN.md) is maintained here;
-coordinated rollout steps remain in the shared
-[handoff document](../docs/auth/implementation/SESSION_HANDOFF.md).
+`LoginSessionStore` is implemented by `RedisLoginSessionStore`. Login does not
+retry uncertain writes. Revocation uses bounded retries because it is idempotent.
+The [session contract](docs/session/SESSION_DESIGN.md) defines outcomes and races;
+the BFF [rollout guide](../loresentry-gateway/docs/ROLLOUT.md) defines deployment gates.
 
 ## Schema
 
@@ -129,9 +124,6 @@ before starting the application; `.env` files are not loaded automatically.
 | --- | --- |
 | PostgreSQL | `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USERNAME`, `DB_PASSWORD` |
 | Redis | `SPRING_DATA_REDIS_HOST`, `SPRING_DATA_REDIS_PORT`, `SPRING_DATA_REDIS_PASSWORD` when required |
-| JWT private key | `AUTH_JWT_PRIVATE_KEY_BASE64`: unencrypted PKCS#8 DER encoded as one-line Base64 |
-| JWT public key | `AUTH_JWT_PUBLIC_KEY_PATH`: path to a readable SPKI PEM public key |
-| JWT key identity | `AUTH_JWT_KEY_ID`: persistent UUID v4 for this key pair |
 | Google OAuth | `AUTH_GOOGLE_CLIENT_ID`, `AUTH_GOOGLE_CLIENT_SECRET`, `AUTH_GOOGLE_REDIRECT_URI` |
 
 Defaults are PostgreSQL `localhost:5432/authentication`, user
@@ -140,22 +132,6 @@ Defaults are PostgreSQL `localhost:5432/authentication`, user
 HTTP callback is allowed only on localhost or a loopback address. Register the
 same callback in Google and point it at the browser-facing BFF.
 
-Generate local test keys once with OpenSSL on the Linux host. Keep these files
-between restarts; repeat generation only when intentionally replacing the keys.
-Both `.local/` and local environment files are excluded from Git and Docker build
-contexts.
-
-```bash
-umask 077
-mkdir -p .local
-openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 -out .local/auth-private.pem
-openssl pkey -in .local/auth-private.pem -pubout -out .local/auth-public.pem
-cat /proc/sys/kernel/random/uuid > .local/auth-kid
-export AUTH_JWT_PRIVATE_KEY_BASE64="$(openssl pkcs8 -topk8 -nocrypt -in .local/auth-private.pem -outform DER | base64 -w0)"
-export AUTH_JWT_PUBLIC_KEY_PATH="$PWD/.local/auth-public.pem"
-export AUTH_JWT_KEY_ID="$(cat .local/auth-kid)"
-```
-
 After supplying the database password and Google configuration:
 
 ```bash
@@ -163,14 +139,11 @@ SPRING_PROFILES_ACTIVE=local ./gradlew bootRun
 curl http://localhost:8000/health
 ```
 
-Missing or invalid JWT/Google configuration fails startup. Private keys, Google
-secrets and token values must not be committed. Share only the public key and key
-ID with the BFF.
-
-`JwtProperties` and `GoogleProperties` bind the `auth.jwt` and `auth.google`
-settings with `@ConfigurationProperties` and validate required values at startup.
-The environment variables above remain unchanged. RSA key validation and the
-Google callback URL restrictions still run when the adapters are configured.
+Missing or invalid Google configuration fails startup. Service JWT keys are not
+used. Google secrets, Redis credentials and session IDs must not be committed.
+`GoogleProperties` binds `auth.google` and validates the callback URL at startup.
+The Redis account needs the commands listed in the session and operations docs.
+Use [.env.local.example](.env.local.example) for local environment names.
 
 ## Code formatting
 
@@ -190,8 +163,9 @@ existing CI build. Use the Gradle task as the formatting reference across editor
 
 ## Test
 
-See [the verification record](TEST_COVERAGE.md) for design coverage and the
-recorded test result.
+The session implementation passes 108 tests as recorded in
+[LOREKEEPER-589](docs/implementation/LOREKEEPER-589.md).
+[TEST_COVERAGE.md](TEST_COVERAGE.md) preserves the earlier implementation record.
 
 ```bash
 ./gradlew build
@@ -215,7 +189,7 @@ empty V1 tables, including preservation of the V1 checksum.
 ```
 
 The full HTTP test covers preparation, callback, profile editing, repeat login,
-refresh and logout with one active session per user. Unit and adapter
+session replacement and logout with one active session per user. Unit and adapter
 tests cover validation, database races, Redis command outcomes, time limits and
 error responses. ArchUnit enforces dependency boundaries: `domain` and
 `application` compiled classes depend only on core contracts and Java; `config`

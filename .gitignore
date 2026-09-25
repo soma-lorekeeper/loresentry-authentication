@@ -42,3 +42,4 @@ out/
 .local/
 .env
 .env.*
+!.env.local.example
