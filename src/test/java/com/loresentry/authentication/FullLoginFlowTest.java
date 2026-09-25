@@ -25,6 +25,14 @@ class FullLoginFlowTest extends HttpAuthTestSupport {
 
     @Test
     void loginIsWiredToTheNewSessionStore() {
+        var routes =
+                context.getBean(
+                        "requestMappingHandlerMapping",
+                        org.springframework.web.servlet.mvc.method.annotation
+                                .RequestMappingHandlerMapping.class);
+        assertThat(routes.getHandlerMethods().keySet())
+                .noneMatch(mapping -> mapping.toString().contains("/tokens/"));
+        assertThat(context.getEnvironment().getProperty("auth.jwt.private-key-base64")).isNull();
         assertThat(context.getBean(LoginUseCase.class)).isInstanceOf(LoginService.class);
         assertThat(context.getBean(LoginSessionStore.class))
                 .isInstanceOf(RedisLoginSessionStore.class);

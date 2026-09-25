@@ -5,8 +5,6 @@ import com.loresentry.authentication.adapter.in.web.dto.AuthResponses;
 import com.loresentry.authentication.adapter.in.web.mapper.AuthRequestMapper;
 import com.loresentry.authentication.adapter.in.web.mapper.AuthResponseMapper;
 import com.loresentry.authentication.application.port.in.LoginUseCase;
-import com.loresentry.authentication.application.port.in.RefreshUseCase;
-import com.loresentry.authentication.application.port.in.RevokeUseCase;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseEntity;
@@ -25,8 +23,6 @@ import org.springframework.web.bind.annotation.RestController;
 @RequiredArgsConstructor
 public class AuthController {
     private final LoginUseCase login;
-    private final RefreshUseCase refresh;
-    private final RevokeUseCase revoke;
     private final AuthResponseMapper responseMapper;
     private final AuthRequestMapper requestMapper;
 
@@ -51,20 +47,6 @@ public class AuthController {
         var loginResult = login.callback(command);
         var response = responseMapper.callback(loginResult);
         return ok(response);
-    }
-
-    @PostMapping("/tokens/refresh")
-    public ResponseEntity<AuthResponses.Tokens> refresh(
-            @Valid @RequestBody AuthRequests.RefreshToken request) {
-        var tokenPair = refresh.refresh(request.refreshToken());
-        var response = responseMapper.tokens(tokenPair);
-        return ok(response);
-    }
-
-    @PostMapping("/tokens/revoke")
-    public ResponseEntity<Void> revoke(@Valid @RequestBody AuthRequests.RefreshToken request) {
-        revoke.revoke(request.refreshToken());
-        return ResponseEntity.noContent().header("Cache-Control", "no-store").build();
     }
 
     private <T> ResponseEntity<T> ok(T body) {

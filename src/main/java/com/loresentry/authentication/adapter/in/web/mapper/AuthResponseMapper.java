@@ -4,7 +4,6 @@ import com.loresentry.authentication.adapter.in.web.dto.AuthResponses;
 import com.loresentry.authentication.application.port.in.AccountUseCase;
 import com.loresentry.authentication.application.port.in.AuthFailure.Consumption;
 import com.loresentry.authentication.application.port.in.LoginUseCase;
-import com.loresentry.authentication.application.port.in.TokenPair;
 import org.mapstruct.Mapper;
 import org.mapstruct.Mapping;
 import org.mapstruct.MappingConstants;
@@ -16,8 +15,6 @@ import org.mapstruct.ReportingPolicy;
         unmappedTargetPolicy = ReportingPolicy.ERROR)
 public interface AuthResponseMapper {
     AuthResponses.PreparedLogin preparedLogin(LoginUseCase.PreparedLogin login);
-
-    AuthResponses.Tokens tokens(TokenPair tokens);
 
     AuthResponses.Profile profile(AccountUseCase.Profile profile);
 

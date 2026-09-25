@@ -19,17 +19,6 @@ public final class AuthResponses {
         }
     }
 
-    public record Tokens(
-            @JsonProperty("access_token") String accessToken,
-            @JsonProperty("access_expires_at") Instant accessExpiresAt,
-            @JsonProperty("refresh_token") String refreshToken,
-            @JsonProperty("refresh_expires_at") Instant refreshExpiresAt) {
-        @Override
-        public String toString() {
-            return "Tokens[REDACTED]";
-        }
-    }
-
     @JsonInclude(JsonInclude.Include.ALWAYS)
     public record Callback(
             @JsonProperty("session_id") String sessionId,

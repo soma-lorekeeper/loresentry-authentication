@@ -26,20 +26,17 @@ import org.springframework.test.web.servlet.MockMvc;
 class AuthControllerTest {
     @Autowired MockMvc mvc;
     @MockitoBean LoginUseCase login;
-    @MockitoBean RefreshUseCase refresh;
-    @MockitoBean RevokeUseCase revoke;
-    final Instant atExpiry = Instant.parse("2026-09-17T12:15:00Z"),
-            rtExpiry = Instant.parse("2026-10-01T12:00:00Z");
-    final TokenPair pair = new TokenPair("access", atExpiry, "refresh", rtExpiry);
+    final Instant prepareExpiry = Instant.parse("2026-09-17T12:15:00Z"),
+            sessionExpiry = Instant.parse("2026-10-01T12:00:00Z");
 
     @Test
-    void prepareCallbackAndRefreshHaveExactShapeAndNeverSetBrowserCookies() throws Exception {
+    void prepareAndCallbackHaveExactShapeAndNeverSetBrowserCookies() throws Exception {
         when(login.prepare())
                 .thenReturn(
                         new LoginUseCase.PreparedLogin(
                                 URI.create("https://accounts.google.com/authorize"),
                                 "request",
-                                atExpiry));
+                                prepareExpiry));
         mvc.perform(
                         post("/auth/oauth/google/prepare")
                                 .contentType("application/json")
@@ -50,7 +47,7 @@ class AuthControllerTest {
                 .andExpect(
                         jsonPath("$.authorization_url")
                                 .value("https://accounts.google.com/authorize"))
-                .andExpect(jsonPath("$.expires_at").value(atExpiry.toString()))
+                .andExpect(jsonPath("$.expires_at").value(prepareExpiry.toString()))
                 .andExpect(header().string("Cache-Control", "no-store"))
                 .andExpect(header().doesNotExist("Set-Cookie"))
                 .andExpect(jsonPath("$.login_request_consumed").doesNotExist());
@@ -58,7 +55,7 @@ class AuthControllerTest {
                 .thenReturn(
                         new LoginUseCase.LoginResult(
                                 new com.loresentry.authentication.domain.SessionId("A".repeat(43)),
-                                rtExpiry,
+                                sessionExpiry,
                                 AuthFailure.Consumption.CONSUMED));
         mvc.perform(
                         post("/auth/oauth/google/callback")
@@ -68,35 +65,11 @@ class AuthControllerTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.length()").value(3))
                 .andExpect(jsonPath("$.session_id").value("A".repeat(43)))
-                .andExpect(jsonPath("$.expires_at").value(rtExpiry.toString()))
+                .andExpect(jsonPath("$.expires_at").value(sessionExpiry.toString()))
                 .andExpect(jsonPath("$.login_request_consumed").value(true))
                 .andExpect(header().string("Cache-Control", "no-store"))
                 .andExpect(header().doesNotExist("Set-Cookie"));
         verify(login).callback(new LoginUseCase.Callback("request", "state", "code", null));
-        when(refresh.refresh("rt")).thenReturn(pair);
-        mvc.perform(
-                        post("/auth/tokens/refresh")
-                                .contentType("application/json")
-                                .content("{\"refresh_token\":\"rt\"}"))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.length()").value(4))
-                .andExpect(jsonPath("$.access_expires_at").value(atExpiry.toString()))
-                .andExpect(jsonPath("$.access_token").value("access"))
-                .andExpect(jsonPath("$.refresh_token").value("refresh"))
-                .andExpect(jsonPath("$.refresh_expires_at").value(rtExpiry.toString()))
-                .andExpect(jsonPath("$.login_request_consumed").doesNotExist())
-                .andExpect(header().string("Cache-Control", "no-store"));
-    }
-
-    @Test
-    void revokeReturns204WithoutBody() throws Exception {
-        mvc.perform(
-                        post("/auth/tokens/revoke")
-                                .contentType("application/json")
-                                .content("{\"refresh_token\":\"rt\"}"))
-                .andExpect(status().isNoContent())
-                .andExpect(content().string(""));
-        verify(revoke).revoke("rt");
     }
 
     @ParameterizedTest
@@ -109,7 +82,7 @@ class AuthControllerTest {
                 .thenReturn(
                         new LoginUseCase.LoginResult(
                                 new com.loresentry.authentication.domain.SessionId("A".repeat(43)),
-                                rtExpiry,
+                                sessionExpiry,
                                 consumption));
         mvc.perform(
                         post("/auth/oauth/google/callback")
@@ -121,7 +94,7 @@ class AuthControllerTest {
                 .andExpect(jsonPath("$.session_id").value("A".repeat(43)))
                 .andExpect(jsonPath("$.access_token").doesNotExist())
                 .andExpect(jsonPath("$.refresh_token").doesNotExist())
-                .andExpect(jsonPath("$.expires_at").value(rtExpiry.toString()))
+                .andExpect(jsonPath("$.expires_at").value(sessionExpiry.toString()))
                 .andExpect(
                         jsonPath("$.login_request_consumed")
                                 .value(org.hamcrest.Matchers.equalTo(expected)));
@@ -130,19 +103,6 @@ class AuthControllerTest {
 
     @Test
     void rejectsMissingMalformedOrConflictingBodyFieldsAndUrlOnlyCredentials() throws Exception {
-        for (var body :
-                java.util.List.of(
-                        "{}", "[]", "{broken", "{\"refresh_token\":1}", "{\"refresh_token\":\"\"}"))
-            mvc.perform(post("/auth/tokens/refresh").contentType("application/json").content(body))
-                    .andExpect(status().isBadRequest())
-                    .andExpect(jsonPath("$.code").value("INVALID_REQUEST"))
-                    .andExpect(jsonPath("$.login_request_consumed").doesNotExist());
-        mvc.perform(
-                        post("/auth/tokens/refresh")
-                                .queryParam("refresh_token", "secret")
-                                .contentType("application/json")
-                                .content("{}"))
-                .andExpect(status().isBadRequest());
         mvc.perform(
                         post("/auth/oauth/google/callback")
                                 .contentType("application/json")
@@ -155,11 +115,11 @@ class AuthControllerTest {
                                 .contentType("application/json")
                                 .content("{\"redirect_uri\":\"https://evil.example\"}"))
                 .andExpect(status().isBadRequest());
-        verifyNoInteractions(login, refresh, revoke);
+        verifyNoInteractions(login);
     }
 
     @Test
-    void callbackConsumptionAndRefreshFailureMeaningSurviveHttpMapping() throws Exception {
+    void callbackConsumptionSurvivesHttpMapping() throws Exception {
         when(login.callback(any()))
                 .thenThrow(
                         new AuthFailure(
@@ -174,48 +134,6 @@ class AuthControllerTest {
                 .andExpect(
                         jsonPath("$.login_request_consumed")
                                 .value(org.hamcrest.Matchers.nullValue()));
-        when(refresh.refresh("rt"))
-                .thenThrow(new AuthFailure(AuthFailure.Reason.REFRESH_OUTCOME_UNKNOWN));
-        mvc.perform(
-                        post("/auth/tokens/refresh")
-                                .contentType("application/json")
-                                .content("{\"refresh_token\":\"rt\"}"))
-                .andExpect(status().isServiceUnavailable())
-                .andExpect(jsonPath("$.code").value("REFRESH_OUTCOME_UNKNOWN"))
-                .andExpect(jsonPath("$.next_action").value("RELOGIN"))
-                .andExpect(jsonPath("$.login_request_consumed").doesNotExist());
-    }
-
-    @ParameterizedTest
-    @ValueSource(
-            strings = {
-                "{}",
-                "null",
-                "[]",
-                "\"token\"",
-                "{\"refresh_token\":null}",
-                "{\"refresh_token\":123}",
-                "{\"refresh_token\":1.5}",
-                "{\"refresh_token\":true}",
-                "{\"refresh_token\":[]}",
-                "{\"refresh_token\":{}}",
-                "{\"refresh_token\":\"\"}",
-                "{\"refresh_token\":\"　\"}",
-                "{\"refreshToken\":\"rt\"}",
-                "{\"refresh_token\":\"rt\",\"extra\":null}"
-            })
-    void tokenEndpointsRejectInvalidTypesBlankTokensAndUnknownFields(String body) throws Exception {
-        for (var action : java.util.List.of("refresh", "revoke")) {
-            mvc.perform(
-                            post("/auth/tokens/" + action)
-                                    .contentType("application/json")
-                                    .content(body))
-                    .andExpect(status().isBadRequest())
-                    .andExpect(jsonPath("$.code").value("INVALID_REQUEST"))
-                    .andExpect(header().string("Cache-Control", "no-store"))
-                    .andExpect(jsonPath("$.login_request_consumed").doesNotExist());
-        }
-        verifyNoInteractions(login, refresh, revoke);
     }
 
     @ParameterizedTest
@@ -288,7 +206,7 @@ class AuthControllerTest {
                 .thenReturn(
                         new LoginUseCase.LoginResult(
                                 new com.loresentry.authentication.domain.SessionId("A".repeat(43)),
-                                rtExpiry,
+                                sessionExpiry,
                                 AuthFailure.Consumption.UNKNOWN));
         mvc.perform(
                         post("/auth/oauth/google/callback")

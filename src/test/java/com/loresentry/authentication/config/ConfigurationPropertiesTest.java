@@ -4,7 +4,6 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import com.loresentry.authentication.adapter.out.google.GoogleSettings;
 import com.loresentry.authentication.config.properties.GoogleProperties;
-import com.loresentry.authentication.config.properties.JwtProperties;
 import java.io.IOException;
 import java.util.LinkedHashMap;
 import java.util.Map;
@@ -21,14 +20,11 @@ import org.springframework.core.io.ClassPathResource;
 
 class ConfigurationPropertiesTest {
     @Configuration(proxyBeanMethods = false)
-    @EnableConfigurationProperties({JwtProperties.class, GoogleProperties.class})
+    @EnableConfigurationProperties(GoogleProperties.class)
     static class PropertiesConfiguration {}
 
     private final Map<String, String> values =
             Map.of(
-                    "auth.jwt.private-key-base64", "test-private-key",
-                    "auth.jwt.public-key-path", "/test/public.pem",
-                    "auth.jwt.key-id", "test-key-id",
                     "auth.google.client-id", "test-client",
                     "auth.google.client-secret", "test-client-secret",
                     "auth.google.redirect-uri",
@@ -41,9 +37,6 @@ class ConfigurationPropertiesTest {
                         .load("application", new ClassPathResource("application.yaml"));
         Map<String, Object> environment =
                 Map.of(
-                        "AUTH_JWT_PRIVATE_KEY_BASE64", values.get("auth.jwt.private-key-base64"),
-                        "AUTH_JWT_PUBLIC_KEY_PATH", values.get("auth.jwt.public-key-path"),
-                        "AUTH_JWT_KEY_ID", values.get("auth.jwt.key-id"),
                         "AUTH_GOOGLE_CLIENT_ID", values.get("auth.google.client-id"),
                         "AUTH_GOOGLE_CLIENT_SECRET", values.get("auth.google.client-secret"),
                         "AUTH_GOOGLE_REDIRECT_URI", values.get("auth.google.redirect-uri"));
@@ -60,13 +53,6 @@ class ConfigurationPropertiesTest {
                 .run(
                         context -> {
                             assertThat(context).hasNotFailed();
-                            var jwt = context.getBean(JwtProperties.class);
-                            assertThat(jwt.privateKeyBase64())
-                                    .isEqualTo(values.get("auth.jwt.private-key-base64"));
-                            assertThat(jwt.publicKeyPath())
-                                    .isEqualTo(values.get("auth.jwt.public-key-path"));
-                            assertThat(jwt.keyId()).isEqualTo(values.get("auth.jwt.key-id"));
-                            assertThat(jwt.toString()).isEqualTo("JwtProperties[REDACTED]");
                             var google = context.getBean(GoogleProperties.class);
                             assertThat(google.clientId())
                                     .isEqualTo(values.get("auth.google.client-id"));
@@ -81,9 +67,6 @@ class ConfigurationPropertiesTest {
     @ParameterizedTest
     @ValueSource(
             strings = {
-                "auth.jwt.private-key-base64",
-                "auth.jwt.public-key-path",
-                "auth.jwt.key-id",
                 "auth.google.client-id",
                 "auth.google.client-secret",
                 "auth.google.redirect-uri"

@@ -50,19 +50,15 @@ class ErrorContractTest {
                         entry("OAUTH_REQUEST_INVALID", "400 RESTART_LOGIN"),
                         entry("OAUTH_LOGIN_DENIED", "400 RESTART_LOGIN"),
                         entry("OAUTH_IDENTITY_INVALID", "401 RESTART_LOGIN"),
-                        entry("REFRESH_REJECTED", "401 RELOGIN"),
-                        entry("INVALID_REFRESH_TOKEN", "401 NONE"),
                         entry("USER_CONTEXT_REQUIRED", "401 RELOGIN"),
                         entry("USER_NOT_FOUND", "404 RELOGIN"),
                         entry("LOGIN_UNAVAILABLE", "503 RESTART_LOGIN"),
-                        entry("REFRESH_UNAVAILABLE", "503 RETRY_LATER"),
-                        entry("REFRESH_OUTCOME_UNKNOWN", "503 RELOGIN"),
                         entry("REVOCATION_UNCONFIRMED", "503 NONE"),
                         entry("ACCOUNT_UNAVAILABLE", "503 RETRY_LATER"),
                         entry("INTERNAL_ERROR", "500 NONE"));
         assertThat(expected).hasSize(AuthFailure.Reason.values().length);
         for (var reason : AuthFailure.Reason.values()) {
-            var request = new MockHttpServletRequest("POST", "/auth/tokens/refresh");
+            var request = new MockHttpServletRequest("POST", "/auth/sessions/revoke");
             var response = ErrorResponses.response(new AuthFailure(reason), request);
             assertThat(
                             response.getStatusCode().value()

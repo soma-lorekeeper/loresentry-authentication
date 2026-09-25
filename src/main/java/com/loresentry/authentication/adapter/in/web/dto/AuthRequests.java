@@ -36,13 +36,6 @@ public final class AuthRequests {
         }
     }
 
-    public record RefreshToken(@JsonProperty("refresh_token") @NotBlank String refreshToken) {
-        @Override
-        public String toString() {
-            return "RefreshToken[REDACTED]";
-        }
-    }
-
     // Blank/long names remain domain failures (INVALID_DISPLAY_NAME), not malformed requests.
     public record Rename(@JsonProperty("display_name") @NotNull String displayName) {}
 }
