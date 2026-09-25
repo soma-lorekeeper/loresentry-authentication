@@ -67,4 +67,37 @@ class FullLoginFlowTest extends HttpAuthTestSupport {
                 .isEqualTo(user);
         assertThat(google.unexpectedCalls.get()).isZero();
     }
+
+    @Test
+    void httpRevocationAcceptsUnknownIdsAndNeverDeletesTheNewLogin() {
+        var subject = "revoke-" + UUID.randomUUID();
+        var first = login(subject);
+        var old = new SessionId(first.body().get("session_id").asString());
+        var next = new SessionId(login(subject).body().get("session_id").asString());
+        var user = accounts.findByIdentity("google", subject).orElseThrow().user().id();
+        for (int i = 0; i < 2; i++) {
+            var result =
+                    call("POST", "/auth/sessions/revoke", Map.of("session_id", old.value()), null);
+            assertThat(result.status()).isEqualTo(204);
+            assertThat(result.body()).isNull();
+            assertThat(result.headers().firstValue("Cache-Control")).contains("no-store");
+        }
+        assertThat(redis.opsForValue().get("auth:session:{login}:by-user:" + user))
+                .contains(next.hash());
+        error(
+                call("POST", "/auth/sessions/revoke", Map.of("session_id", "malformed"), null),
+                400,
+                "INVALID_SESSION_ID",
+                "NONE");
+        assertThat(
+                        call(
+                                        "POST",
+                                        "/auth/sessions/revoke",
+                                        Map.of("session_id", next.value()),
+                                        null)
+                                .status())
+                .isEqualTo(204);
+        assertThat(redis.hasKey("auth:session:{login}:by-user:" + user)).isFalse();
+        assertThat(redis.hasKey("auth:session:{login}:by-id:" + next.hash())).isFalse();
+    }
 }

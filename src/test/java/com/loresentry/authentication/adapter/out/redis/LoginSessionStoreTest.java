@@ -219,4 +219,98 @@ class LoginSessionStoreTest {
                     .eval(any(byte[].class), eq(ReturnType.INTEGER), eq(2), any(byte[][].class));
         }
     }
+
+    @Test
+    void revocationOnlyDeletesTheSuppliedSessionInBothLoginOrders() {
+        var user = UUID.randomUUID();
+        var old = ids.generate();
+        var next = ids.generate();
+        store.replace(user, old).orElseThrow();
+        store.replace(user, next).orElseThrow();
+        store.revoke(old);
+        store.revoke(old);
+        assertThat(redis.hasKey(PREFIX + "by-id:" + old.hash())).isFalse();
+        assertThat(redis.opsForValue().get(PREFIX + "by-user:" + user)).contains(next.hash());
+        store.revoke(next);
+        assertThat(redis.hasKey(PREFIX + "by-id:" + next.hash())).isFalse();
+        assertThat(redis.hasKey(PREFIX + "by-user:" + user)).isFalse();
+        store.replace(user, old).orElseThrow();
+        store.revoke(old);
+        store.replace(user, next).orElseThrow();
+        store.revoke(old);
+        assertThat(redis.opsForValue().get(PREFIX + "by-user:" + user)).contains(next.hash());
+        store.revoke(ids.generate());
+    }
+
+    @Test
+    void corruptOrMismatchedExpiryCannotBeReportedAsRevoked() {
+        var user = UUID.randomUUID();
+        var id = ids.generate();
+        store.replace(user, id).orElseThrow();
+        var key = PREFIX + "by-id:" + id.hash();
+        var index = PREFIX + "by-user:" + user;
+        redis.expire(key, Duration.ofSeconds(30));
+        assertThatThrownBy(() -> store.revoke(id)).isInstanceOf(PortFailure.class);
+        assertThat(redis.hasKey(key)).isTrue();
+        assertThat(redis.hasKey(index)).isTrue();
+        redis.opsForValue()
+                .set(
+                        key,
+                        "{\"schema_version\":2,\"schema_version\":2,\"user_id\":\""
+                                + user
+                                + "\",\"created_at\":1}",
+                        Duration.ofSeconds(30));
+        assertThatThrownBy(() -> store.revoke(id)).isInstanceOf(PortFailure.class);
+        assertThat(redis.hasKey(index)).isTrue();
+        redis.delete(key);
+        store.revoke(id);
+        assertThat(redis.hasKey(index)).isTrue();
+    }
+
+    @Test
+    void aGetFinishingAfterTheDeadlineCannotStartRevocation() throws Exception {
+        var mockFactory = mock(RedisConnectionFactory.class);
+        var connection = mock(RedisConnection.class);
+        var strings = mock(RedisStringCommands.class);
+        var release = new CountDownLatch(1);
+        var closed = new CountDownLatch(1);
+        var user = UUID.randomUUID();
+        when(mockFactory.getConnection()).thenReturn(connection);
+        when(connection.stringCommands()).thenReturn(strings);
+        when(strings.get(any()))
+                .thenAnswer(
+                        call -> {
+                            while (true) {
+                                try {
+                                    release.await();
+                                    break;
+                                } catch (InterruptedException ignored) {
+                                }
+                            }
+                            return ("{\"schema_version\":2,\"user_id\":\""
+                                            + user
+                                            + "\",\"created_at\":1}")
+                                    .getBytes();
+                        });
+        doAnswer(
+                        call -> {
+                            closed.countDown();
+                            return null;
+                        })
+                .when(connection)
+                .close();
+        try (var adapter = new RedisLoginSessionStore(new StringRedisTemplate(mockFactory))) {
+            assertThatThrownBy(() -> adapter.revoke(ids.generate()))
+                    .isInstanceOfSatisfying(
+                            PortFailure.class,
+                            e ->
+                                    assertThat(e.execution())
+                                            .isEqualTo(PortFailure.Execution.NOT_EXECUTED));
+            release.countDown();
+            assertThat(closed.await(2, TimeUnit.SECONDS)).isTrue();
+            verify(connection, never()).scriptingCommands();
+        } finally {
+            release.countDown();
+        }
+    }
 }

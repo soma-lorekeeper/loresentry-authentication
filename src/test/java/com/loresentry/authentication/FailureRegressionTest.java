@@ -208,6 +208,61 @@ class FailureRegressionTest extends HttpAuthTestSupport {
         assertThat(states.find(next.id())).isEmpty();
     }
 
+    @Test
+    void revocationRetryAfterANewLoginKeepsTheNewSession() {
+        var subject = "revoke-race-" + UUID.randomUUID();
+        var initial = login(subject);
+        var id =
+                new com.loresentry.authentication.domain.SessionId(
+                        initial.body().get("session_id").asString());
+        var user = userOf(initial);
+        var next = new com.loresentry.authentication.adapter.out.id.SecureSessionIds().generate();
+        var calls = new java.util.concurrent.atomic.AtomicInteger();
+        doAnswer(
+                        call -> {
+                            if (calls.incrementAndGet() == 1) {
+                                call.callRealMethod();
+                                sessionAdapter.replace(user, next).orElseThrow();
+                                throw unavailable(PortFailure.Execution.UNKNOWN);
+                            }
+                            return call.callRealMethod();
+                        })
+                .when(sessionAdapter)
+                .revoke(id);
+        assertThat(
+                        call(
+                                        "POST",
+                                        "/auth/sessions/revoke",
+                                        Map.of("session_id", id.value()),
+                                        null)
+                                .status())
+                .isEqualTo(204);
+        verify(sessionAdapter, times(2)).revoke(id);
+        assertThat(redis.opsForValue().get("auth:session:{login}:by-user:" + user))
+                .contains(next.hash());
+    }
+
+    @Test
+    void failedRevocationReturnsUnconfirmedWithoutDeletingTheNewLogin() {
+        var subject = "revoke-failure-" + UUID.randomUUID();
+        var initial = login(subject);
+        var id =
+                new com.loresentry.authentication.domain.SessionId(
+                        initial.body().get("session_id").asString());
+        var user = userOf(initial);
+        login(subject);
+        var key = "auth:session:{login}:by-user:" + user;
+        var before = redis.opsForValue().get(key);
+        doThrow(unavailable(PortFailure.Execution.UNKNOWN)).when(sessionAdapter).revoke(id);
+        error(
+                call("POST", "/auth/sessions/revoke", Map.of("session_id", id.value()), null),
+                503,
+                "REVOCATION_UNCONFIRMED",
+                "NONE");
+        verify(sessionAdapter, times(3)).revoke(id);
+        assertThat(redis.opsForValue().get(key)).isEqualTo(before);
+    }
+
     private UUID userOf(Result response) {
         var id =
                 new com.loresentry.authentication.domain.SessionId(

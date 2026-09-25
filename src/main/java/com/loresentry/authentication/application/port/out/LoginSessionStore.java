@@ -9,4 +9,7 @@ import java.util.UUID;
 public interface LoginSessionStore {
     /** Empty means a confirmed ID collision with no mutation. Failures are never retried. */
     Optional<Instant> replace(UUID userId, SessionId id);
+
+    /** Confirm the supplied ID is unusable without revoking a newer login. */
+    void revoke(SessionId id);
 }

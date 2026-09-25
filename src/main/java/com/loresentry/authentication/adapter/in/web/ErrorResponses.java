@@ -13,6 +13,7 @@ public final class ErrorResponses {
 
     public static Contract contract(AuthFailure.Reason reason) {
         return switch (reason) {
+            case INVALID_SESSION_ID -> new Contract(400, "Invalid session ID.", "NONE");
             case INVALID_REQUEST -> new Contract(400, "Invalid request.", "NONE");
             case INVALID_DISPLAY_NAME -> new Contract(400, "Invalid display name.", "NONE");
             case OAUTH_REQUEST_INVALID ->

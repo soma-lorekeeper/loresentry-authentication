@@ -18,6 +18,11 @@ public class LoginConfiguration {
     }
 
     @Bean
+    RevokeSessionUseCase revokeSession(LoginSessionStore sessions) {
+        return new RevokeSessionService(sessions);
+    }
+
+    @Bean
     SessionIdGenerator sessionIds() {
         return new SecureSessionIds();
     }
