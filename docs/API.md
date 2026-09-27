@@ -1,6 +1,6 @@
 # Auth 제공 API
 
-> **책임:** Auth가 제공하는 HTTP 요청·응답·검증·오류 변환을 정한다.
+> **책임:** Auth가 제공하는 HTTP 요청·응답·입력 검증·오류 계약을 정한다.
 >
 > **제공자·호출자:** Auth가 제공하고 BFF가 호출한다.
 >
@@ -19,14 +19,12 @@ Auth가 Google을 호출하는 방법은 [호출 API](API_CALLS.md)에서 관리
 - 계정 API만 검증된 `X-User-Id`를 요구한다. 로그인·폐기는 각각의 입력으로 처리한다.
 - 세션 ID·OAuth 코드·임시 상태는 URL·로그·예외 원문에 노출하지 않는다.
 
-## 웹 DTO와 입력 검증
+## 입력 검증
 
-웹 요청·응답은 Java record로 정의하고 Jackson으로 JSON 필드명을 매핑한다.
-Bean Validation으로 필수 값과 콜백의 `code`·`error` 배타 조건을 검사한다.
-알 수 없는 입력 필드와 문자열 필드의 비문자열 값은 거절한다. 표시 이름의 업무 규칙은
-[계정 문서](account/AUTH_ERD.md#2-초기-저장-규칙)에 두고 검증 실패를 API 오류로 변환한다.
-`AuthRequestMapper`·`AuthResponseMapper`가 웹 DTO와 유스케이스 입력·결과를 변환하며
-누락된 대상 필드는 컴파일 오류로 처리한다.
+필수 값과 콜백의 `code`·`error` 배타 조건을 검사한다. 알 수 없는 입력 필드와
+문자열 필드의 비문자열 값은 거절한다. 표시 이름의 업무 규칙은
+[계정 문서](account/AUTH_ERD.md#2-계정-저장-규칙)를 따르고 검증 실패는 아래 오류 계약으로 반환한다.
+웹 DTO와 변환 구현은 [서버 구조](ARCHITECTURE.md#데이터와-프레임워크-경계)를 따른다.
 
 ## API 목록
 
@@ -73,7 +71,7 @@ DB 커밋 후 실패는 [계정 유지 정책](login/LOGIN_FLOW.md#계정-생성
 ## 본인 계정
 
 응답은 `id`, `display_name`, `email`이며 이메일이 없으면 `null`이다.
-수정은 `display_name`만 허용한다. [계정 규칙](account/AUTH_ERD.md#2-초기-저장-규칙)을 유지한다.
+수정은 `display_name`만 허용한다. [계정 규칙](account/AUTH_ERD.md#2-계정-저장-규칙)을 유지한다.
 
 ## 오류 계약
 
@@ -99,19 +97,16 @@ BFF의 보호 요청 검증·연장 실패는 [BFF 제공 API](../../loresentry-
 세션 오류다. 폐기 실패는 브라우저 쿠키 처리와 별개이며
 [BFF 로그아웃](../../loresentry-gateway/docs/auth/LOGOUT_FLOW.md)을 따른다.
 
-## 오류 응답 변환과 로그
+분류되지 않은 예외는 `500 INTERNAL_ERROR`와 고정된 일반 메시지로 응답한다.
+스택·SQL·제공자 오류 원문은 반환하지 않는다. 구현과 로그 처리의 기준은
+[오류 전달 경계](ARCHITECTURE.md#오류-전달-경계), 검증은 [테스트 계획](implementation/TEST_PLAN.md#오류-처리)을 따른다.
 
-`adapter.in.web`의 `@RestControllerAdvice`·`@ExceptionHandler`가 오류 계약으로 변환한다.
-컨트롤러마다 `try-catch`를 반복하지 않는다. MVC 이전 필터의 오류에는 별도 처리 지점이
-필요하며 같은 응답 변환을 사용한다. 계층별 실패 전달 책임은 [서버 구조](ARCHITECTURE.md#오류-전달-경계)를 따른다.
+## 진단 API
 
-포트·서비스가 전달한 명령 미실행과 결과 미확인을 보존한다. 전역 핸들러가 타임아웃만으로
-실패 단계를 추측하지 않는다. OAuth 콜백의 소비 상태도 보존해 위 로그인 응답 규칙에 매핑한다.
+| 메서드·경로 | 용도 |
+|---|---|
+| `GET /health` | 프로세스 상태 확인 |
+| `GET /health/db` | DB 연결 확인 |
+| `GET /` | 서비스 이름 |
 
-- JSON 해석·요청 형식·입력 검증 오류를 정해진 API 오류로 변환한다. 모든 `IllegalArgumentException`을 입력 오류로 간주하지 않는다.
-- 분류되지 않은 예외는 `500 INTERNAL_ERROR`와 고정된 일반 메시지로 응답한다.
-- 허용한 응답 필드만 사용하고 `getMessage()`·스택·SQL·제공자 오류 원문을 반환하지 않는다.
-- 예상하지 못한 오류의 원인과 스택은 비밀값을 제외해 서버에 기록한다. 같은 오류를 계층마다 중복 기록하지 않는다.
-
-검증 항목은 [테스트 계획](implementation/TEST_PLAN.md#오류-처리)을 따른다.
-Spring MVC의 예외 처리 범위는 [공식 문서](https://docs.spring.io/spring-framework/reference/web/webmvc/mvc-controller/ann-exceptionhandler.html)를 참고한다.
+진단 API도 클러스터 내부 접근 범위를 따른다.

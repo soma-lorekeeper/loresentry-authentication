@@ -15,7 +15,7 @@ Auth는 [BFF 로그인 경로](../../../loresentry-gateway/docs/auth/LOGIN_FLOW.
 
 1. OAuth 임시 상태를 저장하고 Google URL·브라우저 연결용 식별자·만료 시각을 반환한다.
 2. 콜백의 임시 식별자와 state를 검증하고 상태를 한 번 소비한다.
-3. Google 코드를 교환해 ID Token을 검증하고 [계정 규칙](../account/AUTH_ERD.md#2-초기-저장-규칙)에 따라 사용자를 조회·저장한다.
+3. Google 코드를 교환해 ID Token을 검증하고 [계정 규칙](../account/AUTH_ERD.md#2-계정-저장-규칙)에 따라 사용자를 조회·저장한다.
 4. DB 커밋 후 안전한 난수 세션 ID를 만들고 공유 저장소에서 사용자별 활성 세션을 교체한다.
 5. 저장 성공이 확인되면 `session_id`, `expires_at`, `login_request_consumed`를 BFF에 반환한다.
 

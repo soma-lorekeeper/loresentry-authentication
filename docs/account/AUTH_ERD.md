@@ -7,15 +7,17 @@
 > **관련 기준:** 동의 테이블과 가입 대기는 [약관 동의 설계](TERMS_CONSENT_DESIGN.md)를 본다.
 
 **사용자 ID는 Auth에서 UUID v7으로 생성하고, 사용자 정보와 소셜 로그인 정보를 분리한다.**
-초기에는 Google 로그인을 제공하며, 계정 연결 없이 서로 다른 소셜 계정은 별도 사용자로 생성한다.
+현재 Google 로그인을 제공하며, 계정 연결 없이 서로 다른 소셜 계정은 별도 사용자로 생성한다.
 사용자 ID와 다른 서비스의 사용자 참조 컬럼은 PostgreSQL `uuid` 타입으로 통일한다.
+다른 서비스는 `users.id`를 값으로 참조하며 DB 간 외래 키는 두지 않는다.
 계정 저장은 Spring Data JPA·Hibernate, 스키마 변경은 Flyway SQL로 관리한다.
 
 아래는 현재 코드와 V2 마이그레이션이 사용하는 구조다.
-V2는 기존 V1 테이블이 비어 있다는 전제로 작성됐으므로 배포 전에 대상 DB 상태를 확인한다.
-마이그레이션과 엔티티 매핑은 아래 JPA와 Flyway 절을 따른다.
+DB 적용 전 [마이그레이션 실행 조건](#마이그레이션-실행-조건)을 확인한다.
+활성 세션과 OAuth 요청은 각각 [세션 계약](../session/SESSION_DESIGN.md)과
+[OAuth 임시 상태](../login/OAUTH_STATE.md)에서 관리한다.
 
-## 1. 초기 ERD
+## 1. 계정 ERD
 
 ```mermaid
 erDiagram
@@ -63,7 +65,7 @@ ERD의 `0..N`은 DB에서 허용하는 관계이며, 계정 연결 기능 제공
 `provider`는 서버에 등록된 로그인 제공자를 구분하며, 이메일을 제공하지 않는 소셜 로그인도
 추가할 수 있도록 `email`은 NULL을 허용한다.
 
-## 2. 초기 저장 규칙
+## 2. 계정 저장 규칙
 
 - 로그인 시 `(provider, provider_id)`로 조회한다. 기존 정보가 있으면 연결된 `user_id`를 사용한다.
 - 처음 로그인한 외부 계정이면 `users`와 `oauth_identities`를 하나의 DB 트랜잭션으로 생성한다.
@@ -125,26 +127,16 @@ Java 21에서는 `com.fasterxml.uuid:java-uuid-generator:5.2.0`을 사용한다.
 - `spring.jpa.hibernate.ddl-auto=validate`로 설정한다. 테이블 생성·변경은 Flyway SQL 마이그레이션으로 관리한다.
 - Flyway는 `spring-boot-starter-flyway`와 PostgreSQL 지원 모듈을 사용하고 버전은 Boot가 관리한다.
   마이그레이션 경로는 `classpath:db/migration`이다. 적용한 파일은 수정하지 않고 새 버전 파일을 추가한다.
-- 기존 DB 상태 확인용 `JdbcClient`는 유지할 수 있지만, 계정 저장 로직에는 JDBC와 JPA를 혼용하지 않는다.
+- 계정 저장은 JPA로 처리한다. DB 연결 진단의 `JdbcClient`와 책임을 구분한다.
 
-### V1에서 현재 계정 구조로 전환
+### 마이그레이션 실행 조건
 
-적용된 `V1__create_users_and_auth_sessions.sql`은 수정하지 않는다.
-`V2__align_auth_accounts.sql`로 [현재 ERD](#1-초기-erd)의 구조를 만든다.
+새 DB는 V1과 V2를 순서대로 실행하고, V1이 적용된 DB는 V2부터 실행한다.
+V2는 기존 V1 테이블이 비어 있다는 전제이며 계정·세션 데이터 이관을 포함하지 않는다.
+V2 적용 전 대상 테이블이 비어 있는지 확인한다. V1의 `uuidv7()` 때문에 PostgreSQL 18이 필요하다.
 
-V2는 기존 V1 테이블이 비어 있다는 전제로 다음 변경을 수행한다.
-
-- 사용하지 않는 `auth_sessions`를 제거한다. 활성 세션은 Redis에 저장한다.
-- `users`의 `google_subject`·`email`·`status`를 제거하고 표시 이름 길이를 50자로 맞춘다.
-- 사용자 ID·생성 시각·수정 시각의 DB 기본값을 제거한다. 현재 애플리케이션이 값을 생성한다.
-- `oauth_identities`와 복합 PK, 사용자 FK·인덱스를 생성한다.
-
-기존 계정·세션 데이터를 옮기는 마이그레이션은 포함하지 않는다. 새 DB는 V1과 V2를
-순서대로 실행하며, 기존 V1 DB는 V2만 실행한다. V1의 `uuidv7()` 때문에 PostgreSQL 18이
-필요하고, 테스트는 `postgres:18.4-alpine`을 사용한다. 배포 전 기존 테이블이 비어 있는지 확인한다.
-
-Spring 통합 테스트는 자동 마이그레이션을 활성화하고, 전환 전용 테스트는 Flyway를
-직접 호출한다. 실행 방식과 검증 항목은 [테스트 계획](../implementation/TEST_PLAN.md#마이그레이션-실행-방식)을 따른다.
+현재 스키마는 [V2 SQL](../../src/main/resources/db/migration/V2__align_auth_accounts.sql)을 따른다.
+검증 방식은 [테스트 계획](../implementation/TEST_PLAN.md#마이그레이션-실행-방식)에서 관리한다.
 
 ### 엔티티 매핑
 
@@ -172,7 +164,7 @@ UUID와 복합 키를 저장 전에 할당하므로, 신규 생성은 `AccountTr
 조회는 Spring Data Repository를 사용하고, 수정은 쓰기 트랜잭션에서 조회한 엔티티의
 변경 감지를 사용한다. 부분 필드만 채운 엔티티를 만들어 `save()`하지 않는다.
 본인 계정과 이메일 조회는 DTO projection 또는 필요한 연관관계의 명시적 조회로 처리한다.
-표시 이름·이메일 갱신 범위와 시각 변경은 [계정 저장 규칙](#2-초기-저장-규칙)을 따른다.
+표시 이름·이메일 갱신 범위와 시각 변경은 [계정 저장 규칙](#2-계정-저장-규칙)을 따른다.
 
 ### 트랜잭션 Bean과 예외 변환
 
@@ -191,8 +183,3 @@ UUID와 복합 키를 저장 전에 할당하므로, 신규 생성은 `AccountTr
 - [Spring Data JPA 신규 엔티티 판단](https://docs.spring.io/spring-data/jpa/reference/jpa/entity-persistence.html)
 - [Spring 트랜잭션 전파와 rollback-only](https://docs.spring.io/spring-framework/reference/data-access/transaction/declarative/tx-propagation.html)
 - [Spring Boot 데이터베이스 초기화](https://docs.spring.io/spring-boot/how-to/data-initialization.html)
-
-## 6. 이후 기능
-
-자체 로그인 자격 증명과 계정 연결은 해당 기능 도입 시 설계한다.
-인증 상태 저장은 [세션 설계](../session/SESSION_DESIGN.md)와 [OAuth 임시 상태](../login/OAUTH_STATE.md)에서 관리한다.

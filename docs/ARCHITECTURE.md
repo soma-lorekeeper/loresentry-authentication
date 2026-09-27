@@ -23,7 +23,7 @@
 
 코어는 Spring·JPA·Redis·HTTP 타입을 참조하지 않는다. 인터페이스는 유스케이스와
 외부 경계에 두며 시간은 `Clock`을 주입한다. Redis 세션 만료의 기준 시각은 저장소
-스크립트의 서버 시각을 사용한다. 패키지를 세분화하면 account·login·session으로 나눈다.
+스크립트의 서버 시각을 사용한다.
 
 ## 데이터와 프레임워크 경계
 
@@ -31,10 +31,16 @@
 Spring Security OAuth2/OIDC를 사용한다. 소셜 신원 포트는 검증한 제공자·subject·이름·
 이메일만 반환하며 제공자 DTO와 JPA 엔티티를 코어에 노출하지 않는다.
 
-웹·영속성 어댑터가 MapStruct로 경계의 데이터를 변환한다. HTTP DTO·입력 검증은
-[Auth 제공 API](API.md#웹-dto와-입력-검증), 엔티티 매핑과 트랜잭션은
-[계정 저장 구현](account/AUTH_ERD.md#5-jpa와-flyway)에서 정한다.
+웹 요청·응답은 Java record이며 Jackson으로 JSON 필드명을 매핑한다. Bean Validation으로
+[API 입력 조건](API.md#입력-검증)을 검사하고, 표시 이름의 업무 검증은 도메인에 둔다.
+`AuthRequestMapper`·`AuthResponseMapper`가 웹 DTO와 유스케이스 입력·결과를 변환한다.
+응답 매퍼는 세션 결과를 펼치고 소비 상태를 `true`·`false`·`null`로 변환한다.
+
+웹·영속성 어댑터는 MapStruct를 사용하며 누락된 대상 필드는 컴파일 오류로 처리한다.
+엔티티 매핑과 트랜잭션은 [계정 저장 구현](account/AUTH_ERD.md#5-jpa와-flyway)을 따른다.
+생성된 매퍼는 `compileJava` 실행 후 `build/generated/sources/annotationProcessor/java/main/`에서 확인한다.
 단순 생성자 주입은 Lombok을 사용하고 초기화 로직이 있는 생성자는 직접 작성한다.
+`lombok.config`는 코어 바이트코드의 의존 경계를 유지하도록 생성 어노테이션을 비활성화한다.
 ArchUnit으로 코어의 컴파일 결과에 프레임워크 의존이 생기지 않는지 검증한다.
 
 ## 처리 순서와 포트
@@ -60,3 +66,16 @@ ArchUnit으로 코어의 컴파일 결과에 프레임워크 의존이 생기지
 업무·포트 예외는 Java `RuntimeException` 기반으로 정의한다. catch는 예외 변환,
 정해진 복구·재시도 또는 처리 상태 보존이 필요한 경계에 둔다.
 동시 가입 충돌의 예외 변환은 [계정 문서](account/AUTH_ERD.md#트랜잭션-bean과-예외-변환)를 따른다.
+
+### 웹 오류 변환과 로그
+
+`adapter.in.web`의 `@RestControllerAdvice`·`@ExceptionHandler`가 오류를 HTTP 응답으로 변환한다.
+컨트롤러마다 `try-catch`를 반복하지 않는다. MVC 이전 필터의 오류는 별도 처리 지점에서
+같은 응답 변환을 사용한다. 콜백의 소비 상태와 명령 실행 결과를 보존하고, 타임아웃만으로
+실패 단계를 추측하지 않는다.
+
+JSON 해석·요청 형식·입력 검증 오류는 정해진 API 오류로 변환한다.
+모든 `IllegalArgumentException`을 입력 오류로 간주하지 않으며 미분류 예외는
+[API 오류 계약](API.md#오류-계약)의 고정 응답으로 처리한다. `getMessage()`를 응답에 직접 넣지 않는다.
+예상하지 못한 오류의 원인과 스택은 비밀값을 제외해 서버에 기록하고 계층마다 중복 기록하지 않는다.
+Spring MVC의 예외 처리 범위는 [공식 문서](https://docs.spring.io/spring-framework/reference/web/webmvc/mvc-controller/ann-exceptionhandler.html)를 참고한다.
