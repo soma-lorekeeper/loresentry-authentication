@@ -1,13 +1,16 @@
 # loresentry-authentication
 
+> 2026-09-26: docs/는 단일 세션 ID와 마지막 활동 후 14일 만료·활동 시 연장 설계로 전환했다. 코드는 아직 이전 방식이며 아래 실행 안내·설정·테스트 안내는 현재 코드 기준이다. [새 설계와 전환 범위](docs/README.md)를 먼저 확인한다.
+
 Authentication service for Lore Sentry.
 
 Handles the Google-based sign-in flow, user account and display name data, and
 authentication session/token logic used by the Gateway/BFF.
 
+See the [provided API](docs/API.md) and [outbound API calls](docs/API_CALLS.md) for the two API roles.
 See the [documentation index](docs/README.md) for Auth contracts, implementation
-and verification, and the [code reading guide](docs/code-guide.md) for package
-responsibilities, the login request flow and startup configuration.
+and verification, and the [code reading guide](docs/code-guide.md) for the login
+request flow, startup configuration and related test locations.
 
 Reached only through `loresentry-gateway` — this service is `ClusterIP` and has
 no route from outside the cluster.
@@ -57,8 +60,8 @@ header, so the deployment must keep this service unreachable from the internet.
 Request and response fields use snake case. Errors contain `code`, `message` and
 `next_action`. Only callback responses include `login_request_consumed`; a null
 value means that consumption could not be confirmed. Token responses use
-`Cache-Control: no-store`. The API contract is maintained in this repository at
-[docs/INTERNAL_API.md](docs/INTERNAL_API.md).
+`Cache-Control: no-store`. The target contract for the planned session-ID migration
+is documented in [docs/API.md](docs/API.md); it is not implemented yet.
 
 Web request and response DTOs are Java records in `adapter.in.web.dto`. Jackson
 maps their JSON field names, and Bean Validation checks required values and the
@@ -90,10 +93,8 @@ login cannot revoke the new session. Login and refresh commands are never retrie
 
 `SessionStore` is implemented by `RedisSessionStore` using `redis/session.lua`.
 Old `auth:refresh:*` keys are not read, and sidless tokens require login again.
-Auth implementation and tests are complete; BFF session checks and coordinated
-production rollout remain separate work. The [session contract](docs/token/SINGLE_SESSION_DESIGN.md) is maintained here;
-coordinated rollout steps remain in the shared
-[handoff document](../docs/auth/implementation/SESSION_HANDOFF.md).
+This section describes the current JWT implementation. The planned replacement is
+the [session-ID design](docs/session/SESSION_DESIGN.md), which is not implemented yet.
 
 ## Schema
 
@@ -188,9 +189,6 @@ existing CI build. Use the Gradle task as the formatting reference across editor
 
 ## Test
 
-See [the verification record](TEST_COVERAGE.md) for design coverage and the
-recorded test result.
-
 ```bash
 ./gradlew build
 AUTH_TEST_REDIS_IMAGE=valkey/valkey:9.0.6-alpine ./gradlew build
@@ -201,6 +199,9 @@ and Redis 7.4 instances on random ports (or the image selected by `AUTH_TEST_RED
 HTTP/JWK server. Tests generate their own RSA keys and do not require Google
 credentials or production connection settings. The first run downloads Gradle
 dependencies and container images.
+
+Test reports are generated in `build/reports/tests/test/index.html` (HTML) and
+`build/test-results/test` (XML).
 
 Spring integration tests enable Flyway at startup to create the schema before
 Hibernate validates it. `MigrationTest` runs without a Spring context and invokes

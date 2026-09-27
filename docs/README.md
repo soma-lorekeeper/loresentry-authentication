@@ -1,52 +1,42 @@
-# Auth 문서
+# Auth 문서 안내
 
-Auth의 서비스별 설계·구현·검증 문서는 이 저장소의 `docs/`에서 관리한다.
-서비스 간 책임과 공동 배포·전환 계약은 공통 문서 저장소를 링크로 참조한다.
+> **책임:** 필요한 작업에 맞는 기준 문서를 선택하고 문서별 담당 범위를 안내한다.
+>
+> **확인할 때:** 어떤 문서를 읽거나 수정해야 할지 정할 때.
 
-**2026-09-24 Auth 단일 세션 구현:** LOREKEEPER-535에서 로그인 교체·RT 원자 갱신·sid 조건부 폐기를 구현했다.
-Redis 7.4·Valkey 9.0.6에서 각각 152개 테스트가 통과했다.
-공유 계약은 [단일 로그인 세션](token/SINGLE_SESSION_DESIGN.md),
-남은 BFF·프론트·ACL·배포 작업은 [전환 인계](../../docs/auth/implementation/SESSION_HANDOFF.md)를 따른다.
-Auth 완료만으로 이전 AT의 실제 보호 API 접근 차단이 완료된 것은 아니다.
+현재 코드는 JWT 기반 AT·RT를 사용한다. 단일 세션 ID·활동 만료 연장과 약관 동의 절차는
+목표 설계이며 미구현이다. 실제 실행 방법·환경변수·현재 API는 [프로젝트 README](../README.md)를 따른다.
 
-## 이전 구현 기록 — 2026-09-22
+## 필요한 작업별 문서
 
-**Auth의 Google 로그인·계정·토큰 구현은 2026-09-22 전체 빌드와 테스트를 통과했다.**
-기준은 `loresentry-authentication`의 로컬 `main` 커밋 `5fadd4f`이며,
-`main`의 Flyway V1을 기반으로 현재 계정 구조로 전환하는 V2까지 검증했다.
-원격 push와 운영 배포는 하지 않았다. 운영 DB에는 V1의 빈 테이블만 있다.
-검증 범위와 결과는 [테스트 계획](implementation/TEST_PLAN.md#실행-결과),
-운영 스키마와의 차이는 [반영 현황](../../docs/TABLE_AND_LOGIC.md#9-스키마-반영-현황)을 참고한다.
+아래에서 작업에 맞는 문서부터 읽는다. 세부 연동 정보가 필요할 때만 해당 문서의 관련 링크를 따른다.
 
-책임과 구조를 먼저 읽고, 작업할 기능의 설계를 확인한다. 세부 구현 방법과 검증 목록은 필요할 때 참고한다.
+| 필요한 작업·질문 | 기준 문서 | 이 문서가 담당하는 내용 |
+|---|---|---|
+| 로직을 어느 계층에 둘 것인가? | [서버 구조](ARCHITECTURE.md) | 패키지 책임·의존 방향·포트·프레임워크와 오류 전달 경계 |
+| 다른 서버가 Auth를 어떻게 호출하는가? | [제공 API](API.md) | Auth가 제공하는 HTTP 경로·DTO·입력 검증·상태 코드·오류 응답 |
+| Auth가 Google에 무엇을 요청하는가? | [호출 API](API_CALLS.md) | Google 대상 주소·요청 설정·코드 교환·공개키 조회·응답 사용·통신 제한 |
+| 회원정보를 무엇으로, 어떻게 저장하는가? | [계정 ERD와 저장 구현](account/AUTH_ERD.md) | users·oauth_identities·갱신 규칙·UUID·트랜잭션·동시 가입·JPA·Flyway |
+| Google 인증 뒤 언제 동의받고 가입을 완료하는가? | [약관 동의 설계](account/TERMS_CONSENT_DESIGN.md) | 약관 버전·동의 테이블·가입 대기·완료·화면 문구와 입력 |
+| 로그인 단계는 어떤 순서로 연결되는가? | [로그인 흐름](login/LOGIN_FLOW.md) | OAuth·계정·동의·세션의 호출 순서와 계정 커밋 후 실패 복구 |
+| state·nonce·PKCE를 어떻게 생성·검증하는가? | [OAuth 상태](login/OAUTH_STATE.md) | 임시 상태 생성·Redis JSON·검증·일회성 소비 |
+| 로그인 상태를 어떻게 저장·연장·폐기하는가? | [세션 계약](session/SESSION_DESIGN.md) | ID·저장 구조·수명·원자적 연산·단일 로그인·동시성과 실패 |
+| 현재 코드의 어느 클래스부터 읽어야 하는가? | [코드 안내](code-guide.md) | 요청 경로·객체 구성·관련 테스트 위치 |
+| 변경 후 무엇을 검증해야 하는가? | [검증 계획](implementation/TEST_PLAN.md) | 계정·OAuth·동의·세션·오류·경쟁·브라우저·ACL 검증 시나리오 |
+| 개인정보 처리를 사용자에게 어떻게 안내하는가? | [개인정보 처리방침](privacy/PRIVACY_POLICY.md) | 처리 목적·항목·보유기간·외부 처리·권리행사 공개 문안 |
+| 사용자가 어떤 서비스 이용 조건에 동의하는가? | [서비스 이용약관](privacy/TERMS_OF_SERVICE.md) | 서비스 이용 조건·원고 권리와 처리 범위·이용자와 운영자의 의무 |
 
-## 공통 설계
+## API 문서 구분
 
-| 문서 | 읽을 때 |
-|---|---|
-| [Auth 책임](../../docs/auth/AUTH_RESPONSIBILITIES.md) | 담당 기능과 BFF 경계 확인 |
-| [애플리케이션 구조](ARCHITECTURE.md) | 패키지·포트·어댑터 구성 |
-| [내부 API](INTERNAL_API.md) | BFF 요청·응답·오류 연동 |
-| [코드 읽기](code-guide.md) | 요청 흐름과 설정에서 구현을 따라가는 순서 |
-| [검증 기록](../TEST_COVERAGE.md) | 실행한 테스트·환경과 재현 방법 |
-| [이전 검증 기록](verification-2026-09-22.md) | 2026-09-22 구현의 검증 이력 |
+`API.md`는 Auth가 제공하는 API, `API_CALLS.md`는 Auth가 호출하는 API를 관리한다.
+호출 대상의 필드·오류 정의는 제공자 계약을 기준으로 하고 호출 문서는 요청 구성과 결과 사용을 설명한다.
 
-## 기능별 문서
+## 문서 책임과 상태
 
-| 폴더 | 역할 |
-|---|---|
-| [account/](account/README.md) | 계정 데이터 구조와 영속성 |
-| [login/](login/README.md) | Google 로그인과 OAuth 임시 상태 |
-| [token/](token/README.md) | JWT와 Refresh Token 정책 |
-| [implementation/](implementation/README.md) | 구현 세부사항과 테스트 계획 |
+각 규칙은 위 담당 문서에서 관리하고 다른 문서는 참조한다. 기능별 구현 제약도 해당 기능
+문서에 둔다. 코드 안내는 실제 위치를, 검증 계획은 확인할 시나리오를 안내한다.
+작업 이력·테스트 실행 결과·배포 상태는 해당 이슈에서 관리한다.
 
-폴더 내부의 문서 목록과 읽는 순서는 각 README에서 안내한다.
-동작 정책은 기능별 설계 문서, 기술별 세부 선택과 검증은 `implementation/`에서 관리한다.
-
-## 후속 작업의 범위
-
-- **연동 검증:** 실제 Google·브라우저·BFF 연동을 확인한다. Google 등록 URL과 배포 설정은 [OAuth 요청 설정](implementation/IMPLEMENTATION_NOTES.md#oauth-요청-설정)의 콜백 경로에 맞춘다.
-- **배포 전:** [키 주입 협의](token/JWT_DESIGN.md#배포-시-협의-사항)와 [내부 접근 제한 검증](../../docs/bff/INTERNAL_SERVICE_CALLS.md#내부-서비스-호출)을 수행한다.
-- **별도 설계:** [BFF 상세 설계](../../loresentry-gateway/docs/auth/README.md#남은-설계), [자체 로그인·계정 연결](account/AUTH_ERD.md#4-이후-기능).
-
-공통 맥락은 [루트 문서](../../docs/README.md), BFF는 [해당 폴더](../../loresentry-gateway/docs/README.md)를 참고한다.
+공개 문서 두 개는 미확정 사항이 남은 초안이다. 본문의 확인 항목을 확정하고 실제 구현과
+맞춘 뒤 게시한다. 문서 상단의 책임 안내와 초안 안내 상자는 공개본에서 제외한다.
+BFF 쿠키·브라우저 연동은 [BFF 문서](../../loresentry-gateway/docs/README.md)에서 관리한다.
