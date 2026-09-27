@@ -8,8 +8,7 @@
 >
 > **관련 기준:** 처리 순서는 [로그인 흐름](login/LOGIN_FLOW.md), 저장 연산은 [세션 계약](session/SESSION_DESIGN.md)을 본다.
 
-**단일 세션 ID 방식으로 전환할 목표 API 계약이다.** 2026-09-26 문서 기준이며 코드에는
-아직 반영하지 않았다. 브라우저 API와 쿠키는 BFF가 관리한다.
+단일 세션 ID를 사용하는 현재 Auth API 계약이다. 브라우저 API와 쿠키는 BFF가 관리한다.
 Auth가 Google을 호출하는 방법은 [호출 API](API_CALLS.md)에서 관리한다.
 
 ## 공통 규칙

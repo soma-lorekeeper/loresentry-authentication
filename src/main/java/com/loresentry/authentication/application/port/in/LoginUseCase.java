@@ -1,5 +1,6 @@
 package com.loresentry.authentication.application.port.in;
 
+import com.loresentry.authentication.domain.SessionId;
 import java.net.URI;
 import java.time.Instant;
 
@@ -14,13 +15,13 @@ public interface LoginUseCase {
     PreparedLogin prepare();
 
     /**
-     * 로그인 요청을 검증·소모하고, 공급자 신원 확인과 계정 처리를 거쳐 토큰을 발급한다.
+     * 로그인 요청을 검증·소모하고, 공급자 신원 확인과 계정 처리를 거쳐 세션을 생성한다.
      *
      * <p>요청 소모 이후 실패해도 같은 요청으로 다시 로그인할 수 없다. 실패 시 요청 소모 여부는 {@link AuthFailure#consumption()}으로
-     * 확인한다. 토큰은 계정 처리와 RT 저장이 성공한 뒤 반환한다.
+     * 확인한다. 세션 ID는 계정 커밋과 세션 저장이 성공한 뒤 반환한다.
      *
      * @param command 준비 단계의 요청 식별자와 공급자가 반환한 state, code 또는 error
-     * @return AT·RT와 로그인 요청의 소모 결과
+     * @return 세션 ID·만료와 로그인 요청의 소모 결과
      * @throws AuthFailure 요청이 유효하지 않거나 로그인이 거부되거나 후속 처리가 실패한 경우
      */
     LoginResult callback(Callback command);
@@ -54,11 +55,7 @@ public interface LoginUseCase {
         }
     }
 
-    /**
-     * 로그인 성공 시 반환하는 토큰과 요청 소모 결과다.
-     *
-     * @param tokens 발급한 AT·RT
-     * @param consumption 성공 시 {@link AuthFailure.Consumption#CONSUMED}
-     */
-    record LoginResult(TokenPair tokens, AuthFailure.Consumption consumption) {}
+    /** Confirmed session creation and OAuth consumption result. */
+    record LoginResult(
+            SessionId sessionId, Instant expiresAt, AuthFailure.Consumption consumption) {}
 }

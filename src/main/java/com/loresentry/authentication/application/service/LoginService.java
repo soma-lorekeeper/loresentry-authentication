@@ -10,25 +10,25 @@ import static com.loresentry.authentication.application.port.in.AuthFailure.Reas
 import com.loresentry.authentication.application.port.in.AuthFailure;
 import com.loresentry.authentication.application.port.in.LoginUseCase;
 import com.loresentry.authentication.application.port.in.RegisterIdentityUseCase;
-import com.loresentry.authentication.application.port.out.JwtTokens;
+import com.loresentry.authentication.application.port.out.LoginSessionStore;
 import com.loresentry.authentication.application.port.out.OAuthStateStore;
 import com.loresentry.authentication.application.port.out.OidcClient;
 import com.loresentry.authentication.application.port.out.PortFailure;
-import com.loresentry.authentication.application.port.out.SessionStore;
+import com.loresentry.authentication.application.port.out.SessionIdGenerator;
 import lombok.RequiredArgsConstructor;
 
 /**
- * 로그인 요청 소모, 공급자 신원 검증, 계정 등록과 토큰 발급을 순서대로 연결한다.
+ * 로그인 요청 소모, 공급자 신원 검증, 계정 등록과 세션 생성을 순서대로 연결한다.
  *
- * <p>계정 변경의 DB 커밋 이후 토큰을 발급하고 활성 세션을 교체한다. 이후 실패가 계정 커밋이나 로그인 요청 소모를 되돌리지는 않는다.
+ * <p>계정 변경의 DB 커밋 이후 세션을 생성·교체한다. 이후 실패가 계정 커밋이나 로그인 요청 소모를 되돌리지는 않는다.
  */
 @RequiredArgsConstructor
 public final class LoginService implements LoginUseCase {
     private final OAuthRequests oauthRequests;
     private final OidcClient oidcClient;
     private final RegisterIdentityUseCase accountRegistration;
-    private final JwtTokens jwtTokens;
-    private final SessionStore sessions;
+    private final SessionIdGenerator sessionIds;
+    private final LoginSessionStore sessions;
 
     @Override
     public PreparedLogin prepare() {
@@ -45,15 +45,7 @@ public final class LoginService implements LoginUseCase {
             var identity = oidcClient.exchange(command.code(), loginState);
             // Account registration returns only after the DB transaction commits.
             var user = accountRegistration.register(identity);
-            var sid = java.util.UUID.randomUUID();
-            var issuedTokens = issueTokens(user.id(), sid);
-            sessions.replace(
-                    user.id(),
-                    new SessionStore.Session(
-                            sid,
-                            issuedTokens.refreshJti(),
-                            issuedTokens.tokens().refreshExpiresAt()));
-            return new LoginResult(issuedTokens.tokens(), CONSUMED);
+            return createSession(user.id());
         } catch (PortFailure failure) {
             var reason =
                     switch (failure.kind()) {
@@ -69,11 +61,17 @@ public final class LoginService implements LoginUseCase {
         }
     }
 
-    private JwtTokens.Issued issueTokens(java.util.UUID userId, java.util.UUID sid) {
+    private LoginResult createSession(java.util.UUID userId) {
         try {
-            return jwtTokens.issue(userId, sid);
-        } catch (RuntimeException failure) {
-            throw new AuthFailure(INTERNAL_ERROR);
+            // Only a confirmed collision permits another ID; unknown writes are never replayed.
+            for (int attempt = 0; attempt < 3; attempt++) {
+                var id = sessionIds.generate();
+                var expiresAt = sessions.replace(userId, id);
+                if (expiresAt.isPresent()) return new LoginResult(id, expiresAt.get(), CONSUMED);
+            }
+            throw new AuthFailure(LOGIN_UNAVAILABLE);
+        } catch (PortFailure failure) {
+            throw new AuthFailure(LOGIN_UNAVAILABLE);
         }
     }
 

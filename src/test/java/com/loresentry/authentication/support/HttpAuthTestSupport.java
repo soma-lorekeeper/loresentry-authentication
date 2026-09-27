@@ -34,10 +34,8 @@ public abstract class HttpAuthTestSupport extends DatabaseTestSupport {
     @LocalServerPort int port;
     @Autowired protected JsonMapper mapper;
     @Autowired protected MockGoogle google;
-    @Autowired protected JwtTokens jwt;
     @Autowired protected AccountStore accounts;
     @Autowired protected OAuthStateStore states;
-    @Autowired protected SessionStore sessions;
 
     protected record Result(int status, JsonNode body, HttpHeaders headers) {}
 
@@ -90,14 +88,6 @@ public abstract class HttpAuthTestSupport extends DatabaseTestSupport {
         var result = callback(pending(subject));
         assertThat(result.status()).isEqualTo(200);
         return result;
-    }
-
-    protected Result refresh(String token) {
-        return call("POST", "/auth/tokens/refresh", Map.of("refresh_token", token), null);
-    }
-
-    protected String rt(Result result) {
-        return result.body().get("refresh_token").asString();
     }
 
     protected void error(Result result, int status, String code, String nextAction) {

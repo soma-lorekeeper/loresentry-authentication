@@ -6,17 +6,14 @@ import java.util.Objects;
 public class AuthFailure extends RuntimeException {
     public enum Reason {
         INVALID_REQUEST,
+        INVALID_SESSION_ID,
         INVALID_DISPLAY_NAME,
         OAUTH_REQUEST_INVALID,
         OAUTH_LOGIN_DENIED,
         OAUTH_IDENTITY_INVALID,
-        REFRESH_REJECTED,
-        INVALID_REFRESH_TOKEN,
         USER_CONTEXT_REQUIRED,
         USER_NOT_FOUND,
         LOGIN_UNAVAILABLE,
-        REFRESH_UNAVAILABLE,
-        REFRESH_OUTCOME_UNKNOWN,
         REVOCATION_UNCONFIRMED,
         ACCOUNT_UNAVAILABLE,
         INTERNAL_ERROR

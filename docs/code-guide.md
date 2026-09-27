@@ -6,9 +6,6 @@
 >
 > **관련 기준:** 설계 기준과 계층 책임은 [서버 구조](ARCHITECTURE.md)를 본다.
 
-2026-09-26 세션 설계 전환으로 로그인 완료·인증 세션 부분은 코드와 목표 계약이 다르다.
-아래는 현재 코드에서 유지할 OAuth·계정 경계를 읽는 안내이며 새 세션 구현 완료를 뜻하지 않는다.
-
 요청 흐름은 컨트롤러에서 시작하고, 객체를 어떻게 만들고 연결하는지 궁금할 때는
 `config`를 읽는다. 요청 처리와 서버 시작 시 초기화를 구분해서 따라간다.
 
@@ -38,23 +35,29 @@
 2. 사용자가 Google 인증을 거부했다면 로그인 거부 오류를 반환한다.
 3. `oidcClient.exchange()`로 인증 코드를 교환하고 신원을 확인한다.
 4. `accountRegistration.register()`로 계정을 연결하고 DB 트랜잭션 완료를 기다린다.
-5. 이후의 로그인 완료 단계는 [새 세션 계약](session/SESSION_DESIGN.md#로그인)에 맞춰
-   구현을 교체해야 한다. 현재 코드의 세션 발급 결과를 새 API 응답으로 해석하지 않는다.
+5. `createSession()`에서 `sessionIds.generate()`로 난수 ID를 만들고 `sessions.replace()`로
+   활성 세션을 교체한다. 저장 성공을 확인하면 ID·만료 시각·임시 요청 소비 상태를 반환한다.
 
 `OAuthRequests.consume()`는 입력 검사, 저장된 요청 조회·검증, 소비, 소비한 값의 재검증을
 순서대로 수행한다. 오류에 붙는 소비 상태는 재시도 판단에 영향을 주므로 이 경계를 유지한다.
 
-## 세션 구현 전환
+## 세션 생성과 폐기
 
-현재 SessionStore·RedisSessionStore의 저장 형식·연산은 새 계약과 다르다.
-Auth는 ID 생성·두 인덱스 생성/교체·조건부 폐기로, BFF는 ID 검증·활동 TTL 연장으로
-전환해야 한다. 기존 코드의 클래스·메서드가 새 설계대로 동작한다고 가정하지 않는다.
-[세션 계약](session/SESSION_DESIGN.md)를 따른다.
+- [SecureSessionIds](../src/main/java/com/loresentry/authentication/adapter/out/id/SecureSessionIds.java)는
+  32바이트 난수 ID를 생성한다. `domain.SessionId`가 정규 형식을 검증하고 SHA-256 해시를 계산한다.
+- [RedisLoginSessionStore](../src/main/java/com/loresentry/authentication/adapter/out/redis/RedisLoginSessionStore.java)는
+  `LoginSessionStore`를 구현한다. `redis/login-session.lua`는 두 인덱스를 생성·교체하고,
+  `redis/revoke-session.lua`는 입력 ID에 해당하는 세션만 조건부 폐기한다.
+- [SessionController](../src/main/java/com/loresentry/authentication/adapter/in/web/SessionController.java)는
+  폐기 요청을 `RevokeSessionService`에 전달한다. 서비스는 ID를 검증하고 제한된 예산 안에서 폐기를 재시도한다.
+
+수명·원자성·실패 규칙은 [세션 계약](session/SESSION_DESIGN.md)을 따른다.
+보호 요청의 검증과 활동 TTL 연장은 BFF에서 수행한다.
 
 ## 서버 시작 시 객체 구성
 
 [LoginConfiguration](../src/main/java/com/loresentry/authentication/config/LoginConfiguration.java)은
-`OAuthRequests`와 `LoginService`를 만들고 연결한다.
+`OAuthRequests`, `LoginService`, `SecureSessionIds`, `RevokeSessionService`를 만들고 연결한다.
 [GoogleConfiguration](../src/main/java/com/loresentry/authentication/config/GoogleConfiguration.java)은
 설정값으로 `GoogleOidcClient`를 생성한다.
 
@@ -77,6 +80,7 @@ Auth는 ID 생성·두 인덱스 생성/교체·조건부 폐기로, BFF는 ID �
 ## 검증 위치
 
 - `LoginServiceTest`, `FailureRegressionTest`: 로그인 순서와 실패·소비 상태.
+- `SessionIdTest`, `LoginSessionStoreTest`, `RevokeSessionServiceTest`: ID 형식, Redis 인덱스·경쟁과 조건부 폐기.
 - `GoogleOidcClientTest`: 인증 URL, PKCE·nonce, ID 토큰 검증과 통신 실패.
 - `AuthControllerTest`, `FullLoginFlowTest`: HTTP 계약과 통합 로그인 흐름.
 - `ArchitectureTest`: 계층 간 의존성 방향.

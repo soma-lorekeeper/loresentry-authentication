@@ -29,10 +29,10 @@ public final class AuthRequests {
         }
     }
 
-    public record RefreshToken(@JsonProperty("refresh_token") @NotBlank String refreshToken) {
+    public record Session(@JsonProperty("session_id") String sessionId) {
         @Override
         public String toString() {
-            return "RefreshToken[REDACTED]";
+            return "Session[REDACTED]";
         }
     }
 

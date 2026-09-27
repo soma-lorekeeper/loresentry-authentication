@@ -13,6 +13,7 @@ public final class ErrorResponses {
 
     public static Contract contract(AuthFailure.Reason reason) {
         return switch (reason) {
+            case INVALID_SESSION_ID -> new Contract(400, "Invalid session ID.", "NONE");
             case INVALID_REQUEST -> new Contract(400, "Invalid request.", "NONE");
             case INVALID_DISPLAY_NAME -> new Contract(400, "Invalid display name.", "NONE");
             case OAUTH_REQUEST_INVALID ->
@@ -20,16 +21,10 @@ public final class ErrorResponses {
             case OAUTH_LOGIN_DENIED -> new Contract(400, "Login was denied.", "RESTART_LOGIN");
             case OAUTH_IDENTITY_INVALID ->
                     new Contract(401, "Identity could not be verified.", "RESTART_LOGIN");
-            case REFRESH_REJECTED -> new Contract(401, "Refresh token was rejected.", "RELOGIN");
-            case INVALID_REFRESH_TOKEN -> new Contract(401, "Invalid refresh token.", "NONE");
             case USER_CONTEXT_REQUIRED -> new Contract(401, "User context is required.", "RELOGIN");
             case USER_NOT_FOUND -> new Contract(404, "User was not found.", "RELOGIN");
             case LOGIN_UNAVAILABLE ->
                     new Contract(503, "Login is temporarily unavailable.", "RESTART_LOGIN");
-            case REFRESH_UNAVAILABLE ->
-                    new Contract(503, "Refresh is temporarily unavailable.", "RETRY_LATER");
-            case REFRESH_OUTCOME_UNKNOWN ->
-                    new Contract(503, "Refresh outcome could not be confirmed.", "RELOGIN");
             case REVOCATION_UNCONFIRMED ->
                     new Contract(503, "Revocation could not be confirmed.", "NONE");
             case ACCOUNT_UNAVAILABLE ->

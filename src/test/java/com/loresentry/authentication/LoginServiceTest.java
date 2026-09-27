@@ -16,8 +16,8 @@ class LoginServiceTest {
     final OAuthStateStore states = mock(OAuthStateStore.class);
     final OidcClient provider = mock(OidcClient.class);
     final RegisterIdentityUseCase accounts = mock(RegisterIdentityUseCase.class);
-    final JwtTokens jwt = mock(JwtTokens.class);
-    final SessionStore refresh = mock(SessionStore.class);
+    final SessionIdGenerator ids = mock(SessionIdGenerator.class);
+    final LoginSessionStore sessions = mock(LoginSessionStore.class);
     final Instant now = Instant.now().truncatedTo(java.time.temporal.ChronoUnit.SECONDS);
     final SecureRandom random = new SecureRandom();
     final String id = OAuthSecrets.generate(random);
@@ -34,9 +34,8 @@ class LoginServiceTest {
                     now.plusSeconds(300));
     final OidcClient.Identity identity = new OidcClient.Identity("google", "subject", "Name", null);
     final User user = new User(UUID.randomUUID(), "Name", now, now);
-    final TokenPair tokens =
-            new TokenPair("at", now.plusSeconds(900), "rt", now.plusSeconds(1209600));
-    final UUID jti = UUID.randomUUID();
+    final SessionId sessionId = new SessionId("A".repeat(43));
+    final Instant expiry = now.plusSeconds(1209600);
 
     LoginService service() {
         when(provider.settings())
@@ -45,14 +44,14 @@ class LoginServiceTest {
         when(states.consume(id)).thenReturn(Optional.of(state));
         when(provider.exchange("code", state)).thenReturn(identity);
         when(accounts.register(identity)).thenReturn(user);
-        when(jwt.issue(eq(user.id()), any(UUID.class)))
-                .thenReturn(new JwtTokens.Issued(tokens, jti));
+        when(ids.generate()).thenReturn(sessionId);
+        when(sessions.replace(user.id(), sessionId)).thenReturn(Optional.of(expiry));
         return new LoginService(
                 new OAuthRequests(states, provider, Clock.fixed(now, ZoneOffset.UTC), random),
                 provider,
                 accounts,
-                jwt,
-                refresh);
+                ids,
+                sessions);
     }
 
     LoginUseCase.Callback command() {
@@ -60,44 +59,43 @@ class LoginServiceTest {
     }
 
     @Test
-    void returnsOnlyAfterVerifiedIdentityCommittedAccountAndSavedRefreshState() {
+    void returnsOnlyAfterVerifiedIdentityCommittedAccountAndSavedSession() {
         var service = service();
         assertThat(service.callback(command()))
-                .isEqualTo(new LoginUseCase.LoginResult(tokens, AuthFailure.Consumption.CONSUMED));
-        var order = inOrder(states, provider, accounts, jwt, refresh);
+                .isEqualTo(
+                        new LoginUseCase.LoginResult(
+                                sessionId, expiry, AuthFailure.Consumption.CONSUMED));
+        var order = inOrder(states, provider, accounts, ids, sessions);
         order.verify(provider).settings();
         order.verify(states).find(id);
         order.verify(states).consume(id);
         order.verify(provider).exchange("code", state);
         order.verify(accounts).register(identity);
-        var sid = org.mockito.ArgumentCaptor.forClass(UUID.class);
-        order.verify(jwt).issue(eq(user.id()), sid.capture());
-        order.verify(refresh)
-                .replace(
-                        user.id(),
-                        new SessionStore.Session(sid.getValue(), jti, tokens.refreshExpiresAt()));
+        order.verify(ids).generate();
+        order.verify(sessions).replace(user.id(), sessionId);
     }
 
     @Test
-    void signingFailureDoesNotReplaceExistingSession() {
+    void generatorFailureDoesNotReplaceExistingSession() {
         var service = service();
-        doThrow(new IllegalStateException("signing failed")).when(jwt).issue(any(), any());
+        doThrow(new IllegalStateException("generator failed")).when(ids).generate();
         failure(
                 () -> service.callback(command()),
                 AuthFailure.Reason.INTERNAL_ERROR,
                 AuthFailure.Consumption.CONSUMED);
-        verifyNoInteractions(refresh);
+        verifyNoInteractions(sessions);
     }
 
     @Test
-    void everySuccessfulLoginCreatesANewSessionId() {
+    void confirmedCollisionGeneratesAnotherIdButNeverRetriesUnknownWrites() {
         var service = service();
-        service.callback(command());
-        service.callback(command());
-        var sessions = org.mockito.ArgumentCaptor.forClass(SessionStore.Session.class);
-        verify(refresh, times(2)).replace(eq(user.id()), sessions.capture());
-        assertThat(sessions.getAllValues().get(0).sid())
-                .isNotEqualTo(sessions.getAllValues().get(1).sid());
+        var second = new SessionId("B".repeat(42) + "A");
+        when(ids.generate()).thenReturn(sessionId, second);
+        when(sessions.replace(user.id(), sessionId)).thenReturn(Optional.empty());
+        when(sessions.replace(user.id(), second)).thenReturn(Optional.of(expiry));
+        assertThat(service.callback(command()).sessionId()).isEqualTo(second);
+        verify(sessions).replace(user.id(), sessionId);
+        verify(sessions).replace(user.id(), second);
     }
 
     @Test
@@ -111,7 +109,7 @@ class LoginServiceTest {
                 AuthFailure.Reason.OAUTH_LOGIN_DENIED,
                 AuthFailure.Consumption.CONSUMED);
         verify(provider, never()).exchange(any(), any());
-        verifyNoInteractions(accounts, jwt, refresh);
+        verifyNoInteractions(accounts, ids, sessions);
     }
 
     @Test
@@ -128,7 +126,7 @@ class LoginServiceTest {
                 () -> service.callback(command()),
                 AuthFailure.Reason.OAUTH_IDENTITY_INVALID,
                 AuthFailure.Consumption.CONSUMED);
-        verifyNoInteractions(accounts, jwt, refresh);
+        verifyNoInteractions(accounts, ids, sessions);
         doReturn(identity).when(provider).exchange("code", state);
         doThrow(new AuthFailure(AuthFailure.Reason.LOGIN_UNAVAILABLE))
                 .when(accounts)
@@ -137,16 +135,16 @@ class LoginServiceTest {
                 () -> service.callback(command()),
                 AuthFailure.Reason.LOGIN_UNAVAILABLE,
                 AuthFailure.Consumption.CONSUMED);
-        verifyNoInteractions(jwt, refresh);
+        verifyNoInteractions(ids, sessions);
         doReturn(user).when(accounts).register(identity);
         doThrow(new PortFailure(PortFailure.Kind.UNAVAILABLE, PortFailure.Execution.UNKNOWN, true))
-                .when(refresh)
-                .replace(eq(user.id()), any(SessionStore.Session.class));
+                .when(sessions)
+                .replace(eq(user.id()), any(SessionId.class));
         failure(
                 () -> service.callback(command()),
                 AuthFailure.Reason.LOGIN_UNAVAILABLE,
                 AuthFailure.Consumption.CONSUMED);
-        verify(refresh, times(1)).replace(eq(user.id()), any(SessionStore.Session.class));
+        verify(sessions, times(1)).replace(eq(user.id()), any(SessionId.class));
     }
 
     @Test
@@ -167,7 +165,7 @@ class LoginServiceTest {
                 AuthFailure.Reason.LOGIN_UNAVAILABLE,
                 AuthFailure.Consumption.UNKNOWN);
         verify(provider, never()).exchange(any(), any());
-        verifyNoInteractions(accounts, jwt, refresh);
+        verifyNoInteractions(accounts, ids, sessions);
     }
 
     void failure(
