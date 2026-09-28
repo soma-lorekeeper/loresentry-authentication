@@ -37,8 +37,8 @@ Auth가 Google을 호출하는 방법은 [호출 API](API_CALLS.md)에서 관리
 | 표시 이름 수정 | `PATCH /users/me` | `X-User-Id`, `display_name` | `200`, 수정된 계정 |
 
 활동 시 연장은 BFF의 공유 저장소 연산이며 별도 Auth HTTP API를 두지 않는다.
-약관 조회·동의 완료 API의 경로·응답은 아직 확정하지 않았다.
-가입 동의 분기와 API 확장 범위는 [동의 설계](account/TERMS_CONSENT_DESIGN.md)를 따른다.
+약관 조회·동의 완료 API와 콜백 분기는 아직 미구현이다.
+추가할 MVP 계약은 [동의 설계](account/TERMS_CONSENT_DESIGN.md#4-api-계약)를 따른다.
 
 ## 로그인
 

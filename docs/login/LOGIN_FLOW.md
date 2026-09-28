@@ -8,8 +8,8 @@
 
 Auth는 [BFF 로그인 경로](../../../loresentry-gateway/docs/auth/LOGIN_FLOW.md)의 내부 요청을 처리한다.
 
-아래는 현재 구현 흐름이다. 약관 동의 확인·가입 대기·동의 완료 API는 아직 구현하지 않았다.
-추가할 분기는 [약관 동의 설계](../account/TERMS_CONSENT_DESIGN.md#2-google-인증-이후의-가입동의-흐름)에서 관리한다.
+아래는 현재 구현 흐름이다. 약관 동의 확인·동의 대기·동의 완료 API는 아직 구현하지 않았다.
+추가할 분기는 [약관 동의 설계](../account/TERMS_CONSENT_DESIGN.md#2-google-인증-이후의-동의-흐름)에서 관리한다.
 
 ## 처리 흐름
 
