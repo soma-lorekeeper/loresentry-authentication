@@ -25,7 +25,7 @@ server:
 
 auth:
   terms:
-    enabled: ${AUTH_TERMS_ENABLED:false}
+    enabled: ${AUTH_TERMS_ENABLED:true}
   google:
     client-id: ${AUTH_GOOGLE_CLIENT_ID:}
     client-secret: ${AUTH_GOOGLE_CLIENT_SECRET:}

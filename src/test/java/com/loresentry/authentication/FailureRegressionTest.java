@@ -18,7 +18,9 @@ import org.springframework.context.annotation.Import;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
 
-@SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
+@SpringBootTest(
+        webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT,
+        properties = "auth.terms.enabled=false")
 @Import(HttpAuthTestSupport.GoogleHttpConfiguration.class)
 class FailureRegressionTest extends HttpAuthTestSupport {
     @MockitoSpyBean RedisOAuthStateStore stateAdapter;

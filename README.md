@@ -48,7 +48,7 @@ before starting the application; `.env` files are not loaded automatically.
 | --- | --- |
 | PostgreSQL | `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USERNAME`, `DB_PASSWORD` |
 | Redis | `SPRING_DATA_REDIS_HOST`, `SPRING_DATA_REDIS_PORT`, `SPRING_DATA_REDIS_PASSWORD` when required |
-| Terms consent | `AUTH_TERMS_ENABLED` (default `false`; enable after approved originals and compatible BFF/frontend deployment) |
+| Terms consent | `AUTH_TERMS_ENABLED` (default `true`; requires the published original and compatible BFF/frontend; an explicit environment value overrides the default) |
 | Google OAuth | `AUTH_GOOGLE_CLIENT_ID`, `AUTH_GOOGLE_CLIENT_SECRET`, `AUTH_GOOGLE_REDIRECT_URI` |
 
 Defaults are PostgreSQL `localhost:5432/authentication`, user

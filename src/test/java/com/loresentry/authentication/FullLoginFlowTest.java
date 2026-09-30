@@ -17,7 +17,9 @@ import org.springframework.context.ApplicationContext;
 import org.springframework.context.annotation.Import;
 import org.springframework.data.redis.core.StringRedisTemplate;
 
-@SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
+@SpringBootTest(
+        webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT,
+        properties = "auth.terms.enabled=false")
 @Import(HttpAuthTestSupport.GoogleHttpConfiguration.class)
 class FullLoginFlowTest extends HttpAuthTestSupport {
     @Autowired ApplicationContext context;

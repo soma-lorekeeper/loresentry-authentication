@@ -29,7 +29,7 @@ public class TermsConfiguration {
 
     @Bean
     TermsLoginGate termsLogin(
-            @Value("${auth.terms.enabled:false}") boolean enabled,
+            @Value("${auth.terms.enabled:true}") boolean enabled,
             TermsVersionStore versions,
             TermsAcceptanceStore acceptances,
             ConsentRequestStore requests,
