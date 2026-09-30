@@ -2,6 +2,7 @@ package com.loresentry.authentication;
 
 import static org.assertj.core.api.Assertions.*;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
 
 import com.loresentry.authentication.adapter.out.id.SecureSessionIds;
@@ -34,6 +35,87 @@ class ConsentQueryTest extends DatabaseTestSupport {
 
     String key() {
         return "auth:consent:by-id:" + id.hash();
+    }
+
+    @Autowired com.loresentry.authentication.application.port.in.TermsAcceptUseCase accept;
+    @Autowired com.loresentry.authentication.application.port.out.TermsAcceptanceStore acceptances;
+
+    @Test
+    void mismatchedVersionDoesNotConsumeAndSuccessfulPostCannotBeReplayed() throws Exception {
+        requests.create(id, user, UUID.randomUUID());
+        String body =
+                "{\"consent_request_id\":\""
+                        + id.value()
+                        + "\",\"terms_version_id\":\""
+                        + version
+                        + "\"}";
+        mvc.perform(post("/auth/terms/accept").contentType("application/json").content(body))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.code").value("TERMS_VERSION_MISMATCH"));
+        assertThat(requests.find(id)).isPresent();
+        mvc.perform(get("/auth/terms").header("X-Consent-Request-Id", id.value()))
+                .andExpect(status().isOk());
+        mvc.perform(post("/auth/terms/accept").contentType("application/json").content(body))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.length()").value(2))
+                .andExpect(jsonPath("$.session_id").isString())
+                .andExpect(header().string("Cache-Control", "no-store"));
+        assertThat(acceptances.hasAccepted(user, version)).isTrue();
+        assertThat(requests.find(id)).isEmpty();
+        mvc.perform(post("/auth/terms/accept").contentType("application/json").content(body))
+                .andExpect(status().isUnauthorized());
+        mvc.perform(post("/auth/terms/accept").contentType("application/json").content("{}"))
+                .andExpect(status().isBadRequest());
+    }
+
+    @Test
+    void concurrentCompletionIssuesExactlyOneSessionAndNeverRecreatesConsumedRequest()
+            throws Exception {
+        requests.create(id, user, version);
+        var start = new java.util.concurrent.CountDownLatch(1);
+        var successes = new java.util.concurrent.atomic.AtomicInteger();
+        try (var executor = java.util.concurrent.Executors.newVirtualThreadPerTaskExecutor()) {
+            var futures = new java.util.ArrayList<java.util.concurrent.Future<?>>();
+            for (int i = 0; i < 12; i++)
+                futures.add(
+                        executor.submit(
+                                () -> {
+                                    start.await();
+                                    try {
+                                        accept.accept(id.value(), version.toString());
+                                        successes.incrementAndGet();
+                                    } catch (
+                                            com.loresentry.authentication.application.port.in
+                                                            .AuthFailure
+                                                    error) {
+                                        assertThat(error.reason())
+                                                .isEqualTo(
+                                                        com.loresentry.authentication.application
+                                                                .port.in.AuthFailure.Reason
+                                                                .CONSENT_REQUEST_INVALID);
+                                    }
+                                    return null;
+                                }));
+            start.countDown();
+            for (var future : futures) future.get(10, TimeUnit.SECONDS);
+        }
+        assertThat(successes.get()).isEqualTo(1);
+        assertThat(acceptances.hasAccepted(user, version)).isTrue();
+        assertThat(requests.refreshVersion(id, user, version)).isEmpty();
+        assertThat(redis.hasKey(key())).isFalse();
+    }
+
+    @Test
+    void consumeRejectsVersionChangedDuringValidation() {
+        requests.create(id, user, version);
+        var changed = UUID.randomUUID();
+        requests.refreshVersion(id, user, changed);
+        assertThat(requests.consume(id, user, version))
+                .isEqualTo(ConsentRequestStore.Consumption.VERSION_MISMATCH);
+        assertThat(requests.find(id)).isPresent();
+        assertThat(requests.consume(id, user, changed))
+                .isEqualTo(ConsentRequestStore.Consumption.CONSUMED);
+        assertThat(requests.refreshVersion(id, user, version)).isEmpty();
     }
 
     @BeforeEach

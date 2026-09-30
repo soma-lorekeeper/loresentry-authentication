@@ -17,6 +17,12 @@ if type(value.user_id) ~= 'string' or type(value.terms_version_id) ~= 'string'
 end
 local ttl = redis.call('PTTL', key)
 if ttl <= 0 or value.expires_at <= now then return nil end
+if mode == 'consume' then
+    if value.user_id ~= ARGV[2] then return nil end
+    if value.terms_version_id ~= ARGV[3] then return '#version-mismatch' end
+    redis.call('DEL', key)
+    return 'consumed'
+end
 if mode == 'refresh' then
     if value.user_id ~= ARGV[2] then return nil end
     value.terms_version_id = ARGV[3]

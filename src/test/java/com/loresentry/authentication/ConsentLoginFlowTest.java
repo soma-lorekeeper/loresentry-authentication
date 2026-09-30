@@ -67,6 +67,28 @@ class ConsentLoginFlowTest extends HttpAuthTestSupport {
         assertThat(accounts.findByIdentity("google", subject)).isPresent();
     }
 
+    @Test
+    void completedConsentSurvivesLostResponseAndNextLoginNeedsNoNewConsent() {
+        var current = insert(Instant.now().minusSeconds(60));
+        var first = login(subject);
+        var credential = first.body().get("consent_request_id").asString();
+        var body = Map.of("consent_request_id", credential, "terms_version_id", current.toString());
+        var completed = call("POST", "/auth/terms/accept", body, null);
+        assertThat(completed.status()).isEqualTo(200);
+        assertThat(completed.body().size()).isEqualTo(2);
+        assertThat(completed.body().get("session_id").asString()).hasSize(43);
+        // Treat the successful response as lost; the same request must not issue another session.
+        error(
+                call("POST", "/auth/terms/accept", body, null),
+                401,
+                "CONSENT_REQUEST_INVALID",
+                "RESTART_LOGIN");
+        var retriedLogin = login(subject);
+        assertThat(retriedLogin.body().get("status").asString()).isEqualTo("AUTHENTICATED");
+        assertThat(retriedLogin.body().get("session_id").asString())
+                .isNotEqualTo(completed.body().get("session_id").asString());
+    }
+
     private UUID insert(Instant effective) {
         var id = UUID.randomUUID();
         jdbc.update(

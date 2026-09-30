@@ -45,6 +45,8 @@ class ErrorContractTest {
         Map<AuthFailure.Reason, String> expected =
                 Map.ofEntries(
                         entry("INVALID_REQUEST", "400 NONE"),
+                        entry("CONSENT_REQUEST_INVALID", "401 RESTART_LOGIN"),
+                        entry("TERMS_VERSION_MISMATCH", "409 NONE"),
                         entry("INVALID_SESSION_ID", "400 NONE"),
                         entry("INVALID_DISPLAY_NAME", "400 NONE"),
                         entry("OAUTH_REQUEST_INVALID", "400 RESTART_LOGIN"),

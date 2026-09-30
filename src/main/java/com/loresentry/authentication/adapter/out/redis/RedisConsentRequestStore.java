@@ -89,6 +89,26 @@ public final class RedisConsentRequestStore implements ConsentRequestStore {
         }
     }
 
+    @Override
+    public Consumption consume(ConsentId id, UUID userId, UUID termsVersionId) {
+        try {
+            var result =
+                    redis.execute(
+                            SCRIPT,
+                            List.of("auth:consent:by-id:" + id.hash()),
+                            "consume",
+                            userId.toString(),
+                            termsVersionId.toString());
+            if (result == null) return Consumption.INVALID;
+            if ("#version-mismatch".equals(result)) return Consumption.VERSION_MISMATCH;
+            if ("consumed".equals(result)) return Consumption.CONSUMED;
+            throw new IllegalArgumentException();
+        } catch (RuntimeException error) {
+            throw new PortFailure(
+                    PortFailure.Kind.UNAVAILABLE, PortFailure.Execution.UNKNOWN, false);
+        }
+    }
+
     private UUID uuid(String value) {
         var id = UUID.fromString(value);
         if (!id.toString().equals(value)) throw new IllegalArgumentException();

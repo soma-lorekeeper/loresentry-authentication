@@ -68,17 +68,8 @@ public final class LoginService implements LoginUseCase {
     }
 
     private LoginResult createSession(java.util.UUID userId) {
-        try {
-            // Only a confirmed collision permits another ID; unknown writes are never replayed.
-            for (int attempt = 0; attempt < 3; attempt++) {
-                var id = sessionIds.generate();
-                var expiresAt = sessions.replace(userId, id);
-                if (expiresAt.isPresent()) return new LoginResult(id, expiresAt.get(), CONSUMED);
-            }
-            throw new AuthFailure(LOGIN_UNAVAILABLE);
-        } catch (PortFailure failure) {
-            throw new AuthFailure(LOGIN_UNAVAILABLE);
-        }
+        var issued = SessionIssuance.create(userId, sessionIds, sessions);
+        return new LoginResult(issued.id(), issued.expiresAt(), CONSUMED);
     }
 
     private OAuthStateStore.State consumeLoginRequest(Callback command) {
