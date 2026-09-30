@@ -17,7 +17,8 @@ Auth가 Google을 호출하는 방법은 [호출 API](API_CALLS.md)에서 관리
 - UUID는 문자열, HTTP 시각은 UTC ISO 8601이다. 인증·계정 응답에는 `Cache-Control: no-store`를 적용한다.
 - Auth는 BFF에서만 호출한다. 외부 직접 접근을 차단하고, BFF가 검증한 사용자 식별정보를 신뢰한다.
 - 계정 API만 검증된 `X-User-Id`를 요구한다. 로그인·폐기는 각각의 입력으로 처리한다.
-- 세션 ID·OAuth 코드·임시 상태는 URL·로그·예외 원문에 노출하지 않는다.
+- 약관 응답에도 `Cache-Control: no-store`를 적용한다.
+- 동의 대기 ID·세션 ID·OAuth 코드·임시 상태는 URL·로그·예외 원문에 노출하지 않는다.
 
 ## 입력 검증
 
@@ -31,14 +32,15 @@ Auth가 Google을 호출하는 방법은 [호출 API](API_CALLS.md)에서 관리
 | 기능 | 메서드·경로 | 입력 | 성공 |
 |---|---|---|---|
 | Google 로그인 준비 | `POST /oauth/google/prepare` | 빈 JSON 객체 | `200`, 준비 결과 |
-| Google 콜백 | `POST /oauth/google/callback` | 콜백 정보 | `200`, 새 세션 정보 |
+| Google 콜백 | `POST /oauth/google/callback` | 콜백 정보 | `200`, 로그인 완료 또는 동의 대기 |
+| 약관 조회 | `GET /terms` | `X-Consent-Request-Id` | `200`, 원문과 대기 만료 |
+| 동의 완료 | `POST /terms/accept` | `consent_request_id`, `terms_version_id` | `200`, 새 세션 정보 |
 | 세션 폐기 | `POST /sessions/revoke` | `session_id` | `204`, 본문 없음 |
 | 본인 계정 조회 | `GET /users/me` | `X-User-Id` | `200`, 계정 |
 | 표시 이름 수정 | `PATCH /users/me` | `X-User-Id`, `display_name` | `200`, 수정된 계정 |
 
 활동 시 연장은 BFF의 공유 저장소 연산이며 별도 Auth HTTP API를 두지 않는다.
-약관 조회·동의 완료 API와 콜백 분기는 아직 미구현이다.
-추가할 MVP 계약은 [동의 설계](account/TERMS_CONSENT_DESIGN.md#4-api-계약)를 따른다.
+약관 원문·동의 기록과 대기 저장은 [동의 설계](account/TERMS_CONSENT_DESIGN.md)를 따른다.
 
 ## 로그인
 
@@ -47,18 +49,49 @@ Auth가 Google을 호출하는 방법은 [호출 API](API_CALLS.md)에서 관리
 `code`와 `error`는 동시에 허용하지 않는다. 제공자 오류 설명은 그대로 노출하지 않는다.
 Google 콜백 URI는 서버 설정을 사용하며 호출자가 지정하지 않는다.
 
-성공 콜백은 다음 필드를 반환한다. 세션 교체 성공을 확인하기 전에는 반환하지 않는다.
+콜백의 `status`는 `AUTHENTICATED` 또는 `TERMS_REQUIRED`다.
+로그인 완료는 세션 저장 성공 후 아래 필드를 반환하며 동의 대기 ID는 생략한다.
 
 | 필드 | 의미 |
 |---|---|
+| `status` | `AUTHENTICATED` |
 | `session_id` | CSPRNG 32바이트의 padding 없는 Base64URL. BFF 쿠키용 인증 비밀값 |
 | `expires_at` | 로그인 시 설정한 비활동 만료 시각. 이후 인증 활동으로 연장됨 |
 | `login_request_consumed` | OAuth 임시 상태의 소비 결과 |
+
+`TERMS_REQUIRED`는 `status`, `consent_request_id`, 대기의 `expires_at`,
+`login_request_consumed: true`만 반환한다. 이 분기에서는 세션을 생성하지 않는다.
+동의 대기와 로그인 세션 ID를 함께 반환하지 않는다.
 
 콜백 성공·오류 응답의 `login_request_consumed`는 소비 확인 `true`, 미소비 확인 `false`,
 결과 불명 `null`이다. 다른 API에는 포함하지 않는다. BFF는 이를
 [임시 쿠키 정리](../../loresentry-gateway/docs/auth/LOGIN_FLOW.md#oauth-임시-쿠키)에 사용한다.
 DB 커밋 후 실패는 [계정 유지 정책](login/LOGIN_FLOW.md#계정-생성-후-세션-저장-실패)을 따른다.
+
+## 약관 조회와 동의 완료
+
+| 기능 | Auth 경로 | 내부 입력 | 성공 |
+|---|---|---|---|
+| 약관 조회 | `GET /auth/terms` | `X-Consent-Request-Id` 헤더 | `200`, 아래 약관 필드 |
+| 동의 완료 | `POST /auth/terms/accept` | JSON의 `consent_request_id`, `terms_version_id` | `200`, `session_id`, `expires_at` |
+
+조회 응답은 `terms_version_id`, `version`, `title`, `content`, `effective_at`, `expires_at`이다.
+마지막 필드는 동의 대기의 만료다. Auth는 현재 적용 원문을 반환하고 대기의 대상 버전을
+그 버전으로 갱신하되 만료는 유지한다. 조회 도중 소비된 대기를 재생성하지 않는다.
+
+완료 입력의 버전 ID는 사용자가 확인한 버전이다. Auth는 대기에 연결된 버전 및 현재 적용 버전과
+모두 일치할 때만 저장한다. 성공 응답은 `session_id`, `expires_at`이며 BFF 내부에서만 사용한다.
+
+### 동의 오류
+
+| HTTP | code | 처리 | next_action |
+|---|---|---|---|
+| 400 | `INVALID_REQUEST` | 입력·UUID 형식 오류. 동의 저장 없음 | `NONE` |
+| 401 | `CONSENT_REQUEST_INVALID` | 대기 부재·만료·소비됨 또는 연결 계정 없음 | `RESTART_LOGIN` |
+| 409 | `TERMS_VERSION_MISMATCH` | 제출·대기·현재 버전 불일치. 대기는 소비하지 않음 | `NONE` |
+| 503 | `LOGIN_UNAVAILABLE` | DB·Redis 실패, 적용 약관 없음 또는 완료 결과 불명. 자동 재전송 없이 로그인 재시작 | `RESTART_LOGIN` |
+
+동의 소비·커밋·세션 실패의 처리 순서는 [동의 설계](account/TERMS_CONSENT_DESIGN.md#4-동의-완료의-원자성과-실패-복구)를 따른다.
 
 ## 폐기
 

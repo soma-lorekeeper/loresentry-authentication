@@ -5,7 +5,7 @@
 > **확인할 때:** 어떤 문서를 읽거나 수정해야 할지 정할 때.
 
 Auth는 난수 세션 ID를 발급·저장·폐기한다. 공유 세션의 검증과 활동 만료 연장은 BFF 책임이다.
-약관 동의 절차는 미구현 설계다. 실행 방법과 환경변수는 [프로젝트 README](../README.md)를 따른다.
+약관 동의 검사는 `AUTH_TERMS_ENABLED=true`일 때 적용한다. 실행 방법과 환경변수는 [프로젝트 README](../README.md)를 따른다.
 
 ## 필요한 작업별 문서
 
@@ -17,7 +17,7 @@ Auth는 난수 세션 ID를 발급·저장·폐기한다. 공유 세션의 검�
 | 다른 서버가 Auth를 어떻게 호출하는가? | [제공 API](API.md) | Auth가 제공하는 HTTP 경로·DTO·입력 검증·상태 코드·오류 응답 |
 | Auth가 Google에 무엇을 요청하는가? | [호출 API](API_CALLS.md) | Google 대상 주소·요청 설정·코드 교환·공개키 조회·응답 사용·통신 제한 |
 | 회원정보를 무엇으로, 어떻게 저장하는가? | [계정 ERD와 저장 구현](account/AUTH_ERD.md) | users·oauth_identities·갱신 규칙·UUID·트랜잭션·동시 가입·JPA·Flyway |
-| Google 인증 뒤 언제 동의받고 로그인을 완료하는가? | [약관 동의 설계](account/TERMS_CONSENT_DESIGN.md) | MVP 약관 저장·서버 동의 대기·Auth 조회와 완료 API |
+| Google 인증 뒤 언제 동의받고 로그인을 완료하는가? | [약관 동의 설계](account/TERMS_CONSENT_DESIGN.md) | 약관 저장·서버 동의 대기·완료 처리의 원자성 |
 | 로그인 단계는 어떤 순서로 연결되는가? | [로그인 흐름](login/LOGIN_FLOW.md) | OAuth·계정·세션의 호출 순서와 계정 커밋 후 실패 복구 |
 | state·nonce·PKCE를 어떻게 생성·검증하는가? | [OAuth 상태](login/OAUTH_STATE.md) | 임시 상태 생성·Redis JSON·검증·일회성 소비 |
 | 로그인 상태를 어떻게 저장·연장·폐기하는가? | [세션 계약](session/SESSION_DESIGN.md) | ID·저장 구조·수명·원자적 연산·단일 로그인·동시성과 실패 |

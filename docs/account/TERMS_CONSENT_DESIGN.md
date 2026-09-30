@@ -1,12 +1,12 @@
 # Auth 약관 동의 설계
 
-> **책임:** MVP의 약관 버전·동의 기록, 서버 동의 대기와 Auth 내부 API를 정한다.
+> **책임:** 약관 버전·동의 기록·서버 동의 대기와 완료 처리의 원자성을 정한다.
 >
 > **확인할 때:** Google 인증 후 계정·동의 검사·저장과 내부 API를 구현할 때.
 >
 > **관련 기준:** 공개 문안은 [서비스 이용약관](../privacy/TERMS_OF_SERVICE.md)과 [개인정보 처리방침](../privacy/PRIVACY_POLICY.md)을 본다.
 
-**미구현 목표 설계다.** Google 인증 후 계정은 먼저 생성·조회하고, 현재 시행 중인 최신
+Google 인증 후 계정은 먼저 생성·조회하고, 동의 검사가 활성화되어 있으면 현재 시행 중인 최신
 서비스 이용약관에 동의했을 때 로그인 세션을 발급한다. 동의하지 않은 계정도 보관한다.
 
 동의 대상은 `SERVICE_TERMS` 하나다. 개인정보 처리방침은 열람 링크로 제공한다.
@@ -15,12 +15,12 @@ MVP는 약관 조회·동의 완료 API만 추가한다. 취소 API, 약관 관�
 이용 대상은 [이용약관](../privacy/TERMS_OF_SERVICE.md#제2조-가입과-계정)의 만 14세 이상이다.
 MVP에는 별도 연령 확인 체크박스·생년월일 수집·휴대폰 인증·보호자 동의 기능을 추가하지 않는다.
 Google 로그인 성공을 연령 검증 완료로 취급하지 않으며, 아동 가입 대응과 미성년자 이용 조건은 출시 전 검토한다.
-브라우저 연동은 [BFF 로그인 흐름](../../../loresentry-gateway/docs/auth/LOGIN_FLOW.md#약관-동의-연동-mvp-미구현),
-화면 입력은 [프론트 동의 계약](../../../loresentry-gateway/docs/FRONTEND_AUTH_CONTRACT.md#약관-동의-mvp-미구현)을 따른다.
+브라우저 연동은 [BFF 로그인 흐름](../../../loresentry-gateway/docs/auth/LOGIN_FLOW.md#약관-동의-연동),
+화면 입력은 [프론트 동의 계약](../../../loresentry-gateway/docs/FRONTEND_AUTH_CONTRACT.md#약관-동의)을 따른다.
 
 ## 1. 약관 원문과 동의 기록
 
-Auth PostgreSQL에 다음 두 테이블을 추가한다. 기존 계정 구조는 [계정 ERD](AUTH_ERD.md)를 따른다.
+Auth PostgreSQL의 V3 마이그레이션이 다음 두 테이블을 생성한다. 기존 계정 구조는 [계정 ERD](AUTH_ERD.md)를 따른다.
 
 | 테이블 | 컬럼 | 제약·역할 |
 |---|---|---|
@@ -52,14 +52,16 @@ Auth PostgreSQL에 다음 두 테이블을 추가한다. 기존 계정 구조는
 
 약관 최초 등록·개정은 **새 Flyway 버전 SQL의 INSERT**로 처리한다. 공개된 본문과 적용된
 마이그레이션은 수정하지 않는다. 약관 테이블·최초 원문을 배포한 뒤 동의 검사를 활성화하며,
-적용 가능한 약관이 없으면 로그인을 완료하지 않고 `LOGIN_UNAVAILABLE`을 반환한다.
+`AUTH_TERMS_ENABLED`는 기본 `false`다. 확정 원문 공개와 세 서비스의 호환 배포를 마친 뒤
+`true`로 설정한다. 활성화 상태에서 적용 가능한 약관이 없으면 로그인을 완료하지 않고
+`LOGIN_UNAVAILABLE`을 반환한다. 배포 순서는 [배포·복구](../../../loresentry-gateway/docs/ROLLOUT.md#약관-동의-활성화)를 따른다.
 
 ## 2. Google 인증 이후의 동의 흐름
 
 1. `prepare`는 기존 OAuth 준비만 수행한다. 동의 ID나 약관 버전을 받지 않는다.
 2. 콜백에서 Google 신원을 검증하고 `accountRegistration.register(identity)`로 계정을
    생성·조회한다. 이 계정 트랜잭션은 동의 검사 전에 커밋한다.
-3. `LoginService.callback()`에서 `register()` 반환 후, `createSession()` 호출 전에
+3. `LoginService.callback()`에서 `register()` 반환 후, `SessionIssuance.create()` 호출 전에
    현재 약관 버전의 동의 기록을 확인한다. 동의 기록이 있으면 기존 방식으로 세션을 발급한다.
 4. 동의가 없으면 계정에 연결된 동의 대기를 생성하고 `TERMS_REQUIRED`를 BFF에 반환한다.
    이 분기에서는 로그인 세션을 발급하지 않는다.
@@ -84,48 +86,10 @@ Auth는 대기에 저장된 `user_id`로 계정을 선택한다. BFF는 동의 �
 삭제하지 않고 TTL로 만료시킨다. 부재·만료·소비한 대기는 재사용하지 않는다.
 브라우저 쿠키와 화면 종료 처리는 BFF가 관리한다.
 
-## 4. API 계약
+## 4. 동의 완료의 원자성과 실패 복구
 
-아래는 BFF가 호출할 Auth 내부 API의 미구현 계약이다. 현재 제공 API는 [Auth API](../API.md),
-BFF의 입력 구성과 응답 사용은
-[BFF 동의 호출](../../../loresentry-gateway/docs/API_CALLS.md#약관-동의-호출-mvp-미구현)에서 확인한다.
-공통 JSON·시각·오류 형식을 따르고 모든 동의 응답에 `Cache-Control: no-store`를 적용한다.
-
-### OAuth 콜백 확장
-
-Auth의 기존 `POST /auth/oauth/google/callback`은 `200` 응답을 다음 두 종류로 구분한다.
-
-| status | 반환 필드 |
-|---|---|
-| `AUTHENTICATED` | 기존 `session_id`, `expires_at`, `login_request_consumed` |
-| `TERMS_REQUIRED` | `consent_request_id`, `expires_at`, `login_request_consumed: true` |
-
-`expires_at`은 각 분기에서 발급한 세션 또는 대기의 만료다. 두 ID를 함께 반환하지 않는다.
-기존 오류의 `login_request_consumed` 의미는 유지한다. Auth·BFF·프론트가 새 분기를 처리할 수
-있도록 맞춰 배포한다.
-
-### 약관 조회와 동의 완료
-
-| 기능 | Auth 경로 | 내부 입력 | 성공 |
-|---|---|---|---|
-| 약관 조회 | `GET /auth/terms` | `X-Consent-Request-Id` 헤더 | `200`, 아래 약관 필드 |
-| 동의 완료 | `POST /auth/terms/accept` | JSON의 `consent_request_id`, `terms_version_id` | `200`, `session_id`, `expires_at` |
-
-조회 응답은 `terms_version_id`, `version`, `title`, `content`, `effective_at`, `expires_at`이다.
-마지막 필드는 동의 대기의 만료다. Auth는 현재 적용 원문을 반환하고 대기의 대상 버전을
-그 버전으로 갱신하되 만료는 유지한다. 조회 도중 소비된 대기를 재생성하지 않는다.
-
-완료 입력의 버전 ID는 사용자가 확인한 버전이다. Auth는 대기에 연결된 버전 및 현재 적용 버전과
-모두 일치할 때만 저장한다. 성공 응답은 `session_id`, `expires_at`이며 BFF 내부에서만 사용한다.
-
-### 오류와 완료 처리
-
-| HTTP | code | 처리 | next_action |
-|---|---|---|---|
-| 400 | `INVALID_REQUEST` | 입력·UUID 형식 오류. 동의 저장 없음 | `NONE` |
-| 401 | `CONSENT_REQUEST_INVALID` | 대기 부재·만료·소비됨 또는 연결 계정 없음 | `RESTART_LOGIN` |
-| 409 | `TERMS_VERSION_MISMATCH` | 제출·대기·현재 버전 불일치. 대기는 소비하지 않음 | `NONE` |
-| 503 | `LOGIN_UNAVAILABLE` | DB·Redis 실패, 적용 약관 없음 또는 완료 결과 불명. 자동 재전송 없이 로그인 재시작 | `RESTART_LOGIN` |
+내부 HTTP 필드·상태·오류는 [Auth 제공 API](../API.md#약관-조회와-동의-완료),
+BFF의 입력 구성은 [호출 API](../../../loresentry-gateway/docs/API_CALLS.md#약관-동의-호출)를 따른다.
 
 완료 요청은 입력과 버전을 먼저 검사하고, Redis에서 대상 버전·만료를 다시 확인하며
 대기를 원자적으로 소비한다. 소비에 성공한 요청 하나만 동의 저장·세션 발급을 진행한다.

@@ -4,7 +4,7 @@
 >
 > **확인할 때:** 사용자가 동의할 약관 전문을 작성·검토할 때.
 >
-> **관련 기준:** 개인정보 안내는 [처리방침](PRIVACY_POLICY.md), 체크박스·버튼 문구는 [프론트 동의 계약](../../../loresentry-gateway/docs/FRONTEND_AUTH_CONTRACT.md#약관-동의-mvp-미구현)를 본다.
+> **관련 기준:** 개인정보 안내는 [처리방침](PRIVACY_POLICY.md), 체크박스·버튼 문구는 [프론트 동의 계약](../../../loresentry-gateway/docs/FRONTEND_AUTH_CONTRACT.md#약관-동의)를 본다.
 
 > 게시 전 초안. 확정한 운영 정책을 담으며 현재 구현 완료를 뜻하지 않습니다.
 > 최초 시행일은 [동의 설계](../account/TERMS_CONSENT_DESIGN.md#1-약관-원문과-동의-기록)에 따라 운영 DB 등록 시각의 한국 날짜로 표시합니다.

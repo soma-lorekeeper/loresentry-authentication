@@ -35,11 +35,20 @@
 2. 사용자가 Google 인증을 거부했다면 로그인 거부 오류를 반환한다.
 3. `oidcClient.exchange()`로 인증 코드를 교환하고 신원을 확인한다.
 4. `accountRegistration.register()`로 계정을 연결하고 DB 트랜잭션 완료를 기다린다.
-5. `createSession()`에서 `sessionIds.generate()`로 난수 ID를 만들고 `sessions.replace()`로
-   활성 세션을 교체한다. 저장 성공을 확인하면 ID·만료 시각·임시 요청 소비 상태를 반환한다.
+5. `TermsLoginGate`가 현재 시행 원문과 계정의 동의 기록을 확인한다. 미동의 계정은 대기를 반환한다.
+6. 로그인 완료는 `SessionIssuance.create()`가 난수 ID와 활성 세션을 생성한다.
 
 `OAuthRequests.consume()`는 입력 검사, 저장된 요청 조회·검증, 소비, 소비한 값의 재검증을
 순서대로 수행한다. 오류에 붙는 소비 상태는 재시도 판단에 영향을 주므로 이 경계를 유지한다.
+
+## 약관 조회와 완료
+
+- [TermsController](../src/main/java/com/loresentry/authentication/adapter/in/web/TermsController.java)는 조회·동의 요청을 서비스에 전달한다.
+- `TermsQueryService`는 현재 원문을 조회하고 대기의 대상 버전을 만료 연장 없이 갱신한다.
+- `TermsAcceptService`는 대기를 일회 소비하고 동의 기록 커밋 후 `SessionIssuance.create()`를 호출한다.
+- `JdbcTermsVersionStore`·`JdbcTermsAcceptanceStore`는 원문 조회·동의 기록 저장을 담당한다.
+- `RedisConsentRequestStore`와 `redis/consent-request.lua`는 절대 만료·버전 갱신·일회 소비를 담당한다.
+- `TermsConfiguration`은 서비스와 동의 검사 활성화 설정을 연결한다.
 
 ## 세션 생성과 폐기
 
@@ -83,6 +92,8 @@
 - `SessionIdTest`, `LoginSessionStoreTest`, `RevokeSessionServiceTest`: ID 형식, Redis 인덱스·경쟁과 조건부 폐기.
 - `GoogleOidcClientTest`: 인증 URL, PKCE·nonce, ID 토큰 검증과 통신 실패.
 - `AuthControllerTest`, `FullLoginFlowTest`: HTTP 계약과 통합 로그인 흐름.
+- `TermsSchemaTest`, `TermsVersionStoreTest`, `MigrationTest`: 원문·기록·마이그레이션.
+- `ConsentQueryTest`, `ConsentLoginFlowTest`, `TermsLoginServiceTest`, `TermsAcceptServiceTest`: 대기·로그인·동시 소비·실패 복구.
 - `ArchitectureTest`: 계층 간 의존성 방향.
 
 실행 방법과 검증 범위는 [프로젝트 README](../README.md#test)를 따른다.
