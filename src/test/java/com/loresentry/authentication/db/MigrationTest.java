@@ -25,7 +25,7 @@ class MigrationTest {
         var flyway = migrations("fresh_install");
         var result = flyway.migrate();
         assertThat(result.success).isTrue();
-        assertThat(result.migrationsExecuted).isEqualTo(2);
+        assertThat(result.migrationsExecuted).isEqualTo(3);
         assertCurrentSchema(flyway, "fresh_install");
         assertThat(flyway.migrate().migrationsExecuted).isZero();
     }
@@ -48,7 +48,7 @@ class MigrationTest {
         var checksum = v1.info().current().getChecksum();
 
         var flyway = migrations(schema);
-        assertThat(flyway.migrate().migrationsExecuted).isEqualTo(1);
+        assertThat(flyway.migrate().migrationsExecuted).isEqualTo(2);
         assertThat(flyway.info().applied())
                 .filteredOn(
                         migration ->
@@ -70,9 +70,14 @@ class MigrationTest {
         assertThat(flyway.info().applied())
                 .filteredOn(migration -> migration.getVersion() != null)
                 .extracting(migration -> migration.getVersion().getVersion())
-                .containsExactly("1", "2");
+                .containsExactly("1", "2", "3");
         assertThat(tables(schema))
-                .containsExactlyInAnyOrder("flyway_schema_history", "users", "oauth_identities");
+                .containsExactlyInAnyOrder(
+                        "flyway_schema_history",
+                        "users",
+                        "oauth_identities",
+                        "terms_versions",
+                        "user_terms_acceptances");
         try (Connection connection =
                 DriverManager.getConnection(
                         postgres.getJdbcUrl(), postgres.getUsername(), postgres.getPassword())) {
