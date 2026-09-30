@@ -23,6 +23,9 @@ public class UserEntity {
     @Column(name = "updated_at", nullable = false)
     private Instant updatedAt;
 
+    @Column(name = "onboarding_completed_at")
+    private Instant onboardingCompletedAt;
+
     protected UserEntity() {}
 
     public void rename(String name, Instant time) {

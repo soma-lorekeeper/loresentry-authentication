@@ -45,7 +45,7 @@ class TermsAcceptServiceTest {
                 .thenReturn(
                         Optional.of(
                                 new AccountStore.Account(
-                                        new User(user, "Name", now, now),
+                                        new User(user, "Name", now, now, null),
                                         new OAuthIdentity("google", "subject", user, null))));
         when(versions.current(now))
                 .thenReturn(

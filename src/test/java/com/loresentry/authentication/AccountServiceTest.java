@@ -18,7 +18,7 @@ class AccountServiceTest {
 
     @Test
     void renamePassesOnlyTrimmedNameAndInjectedTimeToPort() {
-        var user = new User(id, "😀".repeat(50), Instant.EPOCH, clock.instant());
+        var user = new User(id, "😀".repeat(50), Instant.EPOCH, clock.instant(), null);
         when(store.rename(id, user.displayName(), clock.instant()))
                 .thenReturn(
                         Optional.of(
@@ -99,7 +99,7 @@ class AccountServiceTest {
 
     @Test
     void registrationRecoversDuplicateInNewPortCall() {
-        var user = new User(id, "kept", Instant.EPOCH, Instant.EPOCH);
+        var user = new User(id, "kept", Instant.EPOCH, Instant.EPOCH, null);
         var account = new AccountStore.Account(user, new OAuthIdentity("google", "id", id, null));
         when(store.findByIdentity("google", "id"))
                 .thenReturn(Optional.empty(), Optional.of(account));
