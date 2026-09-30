@@ -25,7 +25,7 @@ class MigrationTest {
         var flyway = migrations("fresh_install");
         var result = flyway.migrate();
         assertThat(result.success).isTrue();
-        assertThat(result.migrationsExecuted).isEqualTo(3);
+        assertThat(result.migrationsExecuted).isEqualTo(4);
         assertCurrentSchema(flyway, "fresh_install");
         assertThat(flyway.migrate().migrationsExecuted).isZero();
     }
@@ -48,7 +48,7 @@ class MigrationTest {
         var checksum = v1.info().current().getChecksum();
 
         var flyway = migrations(schema);
-        assertThat(flyway.migrate().migrationsExecuted).isEqualTo(2);
+        assertThat(flyway.migrate().migrationsExecuted).isEqualTo(3);
         assertThat(flyway.info().applied())
                 .filteredOn(
                         migration ->
@@ -80,7 +80,16 @@ class MigrationTest {
                     "INSERT INTO users VALUES ('00000000-0000-4000-8000-000000000001', 'Existing author', now(), now())");
             statement.execute(
                     "INSERT INTO oauth_identities VALUES ('GOOGLE', 'existing-subject', '00000000-0000-4000-8000-000000000001', 'author@example.test')");
-            assertThat(migrations(schema).migrate().migrationsExecuted).isEqualTo(1);
+            var v3 =
+                    Flyway.configure()
+                            .dataSource(
+                                    postgres.getJdbcUrl(),
+                                    postgres.getUsername(),
+                                    postgres.getPassword())
+                            .schemas(schema)
+                            .target("3")
+                            .load();
+            assertThat(v3.migrate().migrationsExecuted).isEqualTo(1);
             try (var rows =
                     statement.executeQuery(
                             "SELECT display_name, email FROM users JOIN oauth_identities ON users.id=oauth_identities.user_id")) {
@@ -94,6 +103,57 @@ class MigrationTest {
                     assertThat(rows.getLong(1)).isZero();
                 }
             }
+            var flyway = migrations(schema);
+            assertThat(flyway.migrate().migrationsExecuted).isEqualTo(1);
+            assertPublishedV0(connection);
+            try (var rows = statement.executeQuery("SELECT count(*) FROM user_terms_acceptances")) {
+                rows.next();
+                assertThat(rows.getLong(1)).isZero();
+            }
+            var before =
+                    statement.executeQuery(
+                            "SELECT content, published_at, effective_at FROM terms_versions");
+            before.next();
+            var content = before.getString(1);
+            var published = before.getTimestamp(2);
+            var effective = before.getTimestamp(3);
+            before.close();
+            assertThat(flyway.migrate().migrationsExecuted).isZero();
+            try (var rows =
+                    statement.executeQuery(
+                            "SELECT content, published_at, effective_at FROM terms_versions")) {
+                rows.next();
+                assertThat(rows.getString(1)).isEqualTo(content);
+                assertThat(rows.getTimestamp(2)).isEqualTo(published);
+                assertThat(rows.getTimestamp(3)).isEqualTo(effective);
+                assertThat(rows.next()).isFalse();
+            }
+        }
+    }
+
+    private void assertPublishedV0(Connection connection) throws Exception {
+        try (var statement = connection.createStatement();
+                var rows =
+                        statement.executeQuery(
+                                "SELECT id, version, title, content, published_at = effective_at, "
+                                        + "effective_at <= CURRENT_TIMESTAMP, "
+                                        + "to_char(effective_at AT TIME ZONE 'Asia/Seoul', 'YYYY-MM-DD') "
+                                        + "FROM terms_versions WHERE terms_type = 'SERVICE_TERMS'")) {
+            assertThat(rows.next()).isTrue();
+            assertThat(rows.getString(1)).isEqualTo("b226d203-1e9f-4435-8dc8-7a2dc9fcd505");
+            assertThat(rows.getString(2)).isEqualTo("v0");
+            assertThat(rows.getString(3)).isEqualTo("Lore Sentry 서비스 이용약관");
+            var content = rows.getString(4);
+            for (int article = 1; article <= 10; article++) {
+                assertThat(content).contains("제" + article + "조 ");
+            }
+            assertThat(content)
+                    .contains("https://loresentry.com/policies/privacy.html", "tmdwn0509@gmail.com")
+                    .doesNotContain("PRIVACY_POLICY.md", "초안", "[최초 DB 등록 시 확정]", "**책임:**", "##")
+                    .endsWith("약관 버전: v0\n시행일: " + rows.getString(7));
+            assertThat(rows.getBoolean(5)).isTrue();
+            assertThat(rows.getBoolean(6)).isTrue();
+            assertThat(rows.next()).isFalse();
         }
     }
 
@@ -109,7 +169,7 @@ class MigrationTest {
         assertThat(flyway.info().applied())
                 .filteredOn(migration -> migration.getVersion() != null)
                 .extracting(migration -> migration.getVersion().getVersion())
-                .containsExactly("1", "2", "3");
+                .containsExactly("1", "2", "3", "4");
         assertThat(tables(schema))
                 .containsExactlyInAnyOrder(
                         "flyway_schema_history",
@@ -121,6 +181,7 @@ class MigrationTest {
                 DriverManager.getConnection(
                         postgres.getJdbcUrl(), postgres.getUsername(), postgres.getPassword())) {
             connection.setSchema(schema);
+            assertPublishedV0(connection);
             try (var columns =
                     connection
                             .createStatement()

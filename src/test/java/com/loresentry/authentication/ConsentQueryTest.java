@@ -20,10 +20,18 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.test.context.jdbc.Sql;
 import org.springframework.test.web.servlet.MockMvc;
 
 @SpringBootTest
 @AutoConfigureMockMvc
+// Scenario originals replace v0 only for this test; the migration restores it afterward.
+@Sql(
+        statements =
+                "DELETE FROM terms_versions WHERE terms_type = 'SERVICE_TERMS' AND version = 'v0'")
+@Sql(
+        scripts = "/db/migration/V4__publish_service_terms_v0.sql",
+        executionPhase = Sql.ExecutionPhase.AFTER_TEST_METHOD)
 class ConsentQueryTest extends DatabaseTestSupport {
     @Autowired JdbcTemplate jdbc;
     @Autowired StringRedisTemplate redis;
