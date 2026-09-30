@@ -44,7 +44,8 @@ class LoginCommitTest extends DatabaseTestSupport {
                         accounts,
                         ids,
                         broken,
-                        user -> java.util.Optional.empty());
+                        user -> java.util.Optional.empty(),
+                        accountStore);
         doAnswer(
                         call -> {
                             assertThat(accountStore.findByIdentity("google", identity.subject()))
@@ -85,7 +86,8 @@ class LoginCommitTest extends DatabaseTestSupport {
                         user -> {
                             assertThat(accountStore.findById(user)).isPresent();
                             return java.util.Optional.empty();
-                        });
+                        },
+                        accountStore);
         var next = retry.prepare();
         var nextState = states.find(next.loginRequestId()).orElseThrow();
         var result =

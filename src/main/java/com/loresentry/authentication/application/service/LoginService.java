@@ -11,6 +11,7 @@ import com.loresentry.authentication.application.port.in.AuthFailure;
 import com.loresentry.authentication.application.port.in.LoginUseCase;
 import com.loresentry.authentication.application.port.in.RegisterIdentityUseCase;
 import com.loresentry.authentication.application.port.in.TermsLoginGate;
+import com.loresentry.authentication.application.port.out.AccountStore;
 import com.loresentry.authentication.application.port.out.LoginSessionStore;
 import com.loresentry.authentication.application.port.out.OAuthStateStore;
 import com.loresentry.authentication.application.port.out.OidcClient;
@@ -31,6 +32,7 @@ public final class LoginService implements LoginUseCase {
     private final SessionIdGenerator sessionIds;
     private final LoginSessionStore sessions;
     private final TermsLoginGate terms;
+    private final AccountStore accounts;
 
     @Override
     public PreparedLogin prepare() {
@@ -68,7 +70,7 @@ public final class LoginService implements LoginUseCase {
     }
 
     private LoginResult createSession(java.util.UUID userId) {
-        var issued = SessionIssuance.create(userId, sessionIds, sessions);
+        var issued = SessionIssuance.create(userId, sessionIds, sessions, accounts);
         return new LoginResult(issued.id(), issued.expiresAt(), CONSUMED);
     }
 

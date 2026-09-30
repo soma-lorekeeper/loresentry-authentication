@@ -34,7 +34,8 @@ public class LoginConfiguration {
             RegisterIdentityUseCase accounts,
             SessionIdGenerator ids,
             LoginSessionStore sessions,
-            TermsLoginGate terms) {
-        return new LoginService(requests, provider, accounts, ids, sessions, terms);
+            TermsLoginGate terms,
+            AccountStore accountStore) {
+        return new LoginService(requests, provider, accounts, ids, sessions, terms, accountStore);
     }
 }

@@ -19,6 +19,7 @@ class LoginServiceTest {
     final SessionIdGenerator ids = mock(SessionIdGenerator.class);
     final LoginSessionStore sessions = mock(LoginSessionStore.class);
     final TermsLoginGate terms = mock(TermsLoginGate.class);
+    final AccountStore accountStore = mock(AccountStore.class);
     final Instant now = Instant.now().truncatedTo(java.time.temporal.ChronoUnit.SECONDS);
     final SecureRandom random = new SecureRandom();
     final String id = OAuthSecrets.generate(random);
@@ -47,17 +48,42 @@ class LoginServiceTest {
         when(accounts.register(identity)).thenReturn(user);
         when(ids.generate()).thenReturn(sessionId);
         when(sessions.replace(user.id(), sessionId)).thenReturn(Optional.of(expiry));
+        when(accountStore.findById(user.id()))
+                .thenReturn(
+                        Optional.of(
+                                new AccountStore.Account(
+                                        user,
+                                        new OAuthIdentity("google", "subject", user.id(), null))));
         return new LoginService(
                 new OAuthRequests(states, provider, Clock.fixed(now, ZoneOffset.UTC), random),
                 provider,
                 accounts,
                 ids,
                 sessions,
-                terms);
+                terms,
+                accountStore);
     }
 
     LoginUseCase.Callback command() {
         return new LoginUseCase.Callback(id, state.state(), "code", null);
+    }
+
+    @Test
+    void accountDeletedDuringLoginRevokesTheIssuedSession() {
+        var service = service();
+        when(terms.check(user.id())).thenReturn(Optional.empty());
+        when(accountStore.findById(user.id())).thenReturn(Optional.empty());
+        assertThatThrownBy(() -> service.callback(command()))
+                .isInstanceOfSatisfying(
+                        AuthFailure.class,
+                        e -> {
+                            assertThat(e.reason()).isEqualTo(AuthFailure.Reason.LOGIN_UNAVAILABLE);
+                            assertThat(e.consumption()).isEqualTo(AuthFailure.Consumption.CONSUMED);
+                        });
+        var order = inOrder(sessions, accountStore);
+        order.verify(sessions).replace(user.id(), sessionId);
+        order.verify(accountStore).findById(user.id());
+        order.verify(sessions).revoke(sessionId);
     }
 
     @Test

@@ -11,12 +11,21 @@ final class SessionIssuance {
 
     record Issued(SessionId id, Instant expiresAt) {}
 
-    static Issued create(UUID user, SessionIdGenerator ids, LoginSessionStore sessions) {
+    static Issued create(
+            UUID user, SessionIdGenerator ids, LoginSessionStore sessions, AccountStore accounts) {
         try {
             for (int attempt = 0; attempt < 3; attempt++) {
                 var id = ids.generate();
                 var expiry = sessions.replace(user, id);
-                if (expiry.isPresent()) return new Issued(id, expiry.get());
+                if (expiry.isEmpty()) continue;
+                if (accounts.findById(user).isEmpty()) {
+                    try {
+                        sessions.revoke(id);
+                    } catch (PortFailure ignored) {
+                    }
+                    throw new AuthFailure(AuthFailure.Reason.LOGIN_UNAVAILABLE);
+                }
+                return new Issued(id, expiry.get());
             }
             throw new AuthFailure(AuthFailure.Reason.LOGIN_UNAVAILABLE);
         } catch (PortFailure error) {
