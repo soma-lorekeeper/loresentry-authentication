@@ -18,6 +18,7 @@ class LoginServiceTest {
     final RegisterIdentityUseCase accounts = mock(RegisterIdentityUseCase.class);
     final SessionIdGenerator ids = mock(SessionIdGenerator.class);
     final LoginSessionStore sessions = mock(LoginSessionStore.class);
+    final TermsLoginGate terms = mock(TermsLoginGate.class);
     final Instant now = Instant.now().truncatedTo(java.time.temporal.ChronoUnit.SECONDS);
     final SecureRandom random = new SecureRandom();
     final String id = OAuthSecrets.generate(random);
@@ -51,11 +52,29 @@ class LoginServiceTest {
                 provider,
                 accounts,
                 ids,
-                sessions);
+                sessions,
+                terms);
     }
 
     LoginUseCase.Callback command() {
         return new LoginUseCase.Callback(id, state.state(), "code", null);
+    }
+
+    @Test
+    void pendingConsentIsCheckedAfterRegistrationAndDoesNotCreateSession() {
+        var service = service();
+        var consent = new ConsentId("B".repeat(42) + "A");
+        when(terms.check(user.id()))
+                .thenReturn(
+                        Optional.of(new TermsLoginGate.Required(consent, now.plusSeconds(1800))));
+        var result = service.callback(command());
+        assertThat(result.status()).isEqualTo(LoginUseCase.LoginStatus.TERMS_REQUIRED);
+        assertThat(result.consentRequestId()).isEqualTo(consent);
+        assertThat(result.sessionId()).isNull();
+        var order = inOrder(accounts, terms);
+        order.verify(accounts).register(identity);
+        order.verify(terms).check(user.id());
+        verifyNoInteractions(sessions);
     }
 
     @Test

@@ -42,7 +42,8 @@ class FullLoginFlowTest extends HttpAuthTestSupport {
     void loginReplacesTheCurrentHashAndKeepsTheAccountAndName() {
         var subject = "full-" + UUID.randomUUID();
         var first = login(subject);
-        assertThat(first.body().size()).isEqualTo(3);
+        assertThat(first.body().size()).isEqualTo(4);
+        assertThat(first.body().get("status").asString()).isEqualTo("AUTHENTICATED");
         assertThat(first.body().get("login_request_consumed").booleanValue()).isTrue();
         assertThat(first.headers().firstValue("Cache-Control")).contains("no-store");
         assertThat(first.headers().firstValue("Set-Cookie")).isEmpty();

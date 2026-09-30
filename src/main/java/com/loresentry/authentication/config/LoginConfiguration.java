@@ -33,7 +33,8 @@ public class LoginConfiguration {
             OidcClient provider,
             RegisterIdentityUseCase accounts,
             SessionIdGenerator ids,
-            LoginSessionStore sessions) {
-        return new LoginService(requests, provider, accounts, ids, sessions);
+            LoginSessionStore sessions,
+            TermsLoginGate terms) {
+        return new LoginService(requests, provider, accounts, ids, sessions, terms);
     }
 }

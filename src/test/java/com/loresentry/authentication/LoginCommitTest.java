@@ -37,7 +37,14 @@ class LoginCommitTest extends DatabaseTestSupport {
                 .thenReturn(URI.create("https://accounts.google.com/authorize"));
         when(provider.exchange(eq("code"), any())).thenReturn(identity);
         var requests = new OAuthRequests(states, provider, Clock.systemUTC(), new SecureRandom());
-        var login = new LoginService(requests, provider, accounts, ids, broken);
+        var login =
+                new LoginService(
+                        requests,
+                        provider,
+                        accounts,
+                        ids,
+                        broken,
+                        user -> java.util.Optional.empty());
         doAnswer(
                         call -> {
                             assertThat(accountStore.findByIdentity("google", identity.subject()))
@@ -68,7 +75,17 @@ class LoginCommitTest extends DatabaseTestSupport {
         UUID committed =
                 accountStore.findByIdentity("google", identity.subject()).orElseThrow().user().id();
         assertThat(states.find(prepared.loginRequestId())).isEmpty();
-        var retry = new LoginService(requests, provider, accounts, ids, sessions);
+        var retry =
+                new LoginService(
+                        requests,
+                        provider,
+                        accounts,
+                        ids,
+                        sessions,
+                        user -> {
+                            assertThat(accountStore.findById(user)).isPresent();
+                            return java.util.Optional.empty();
+                        });
         var next = retry.prepare();
         var nextState = states.find(next.loginRequestId()).orElseThrow();
         var result =

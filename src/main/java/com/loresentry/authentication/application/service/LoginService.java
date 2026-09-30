@@ -10,6 +10,7 @@ import static com.loresentry.authentication.application.port.in.AuthFailure.Reas
 import com.loresentry.authentication.application.port.in.AuthFailure;
 import com.loresentry.authentication.application.port.in.LoginUseCase;
 import com.loresentry.authentication.application.port.in.RegisterIdentityUseCase;
+import com.loresentry.authentication.application.port.in.TermsLoginGate;
 import com.loresentry.authentication.application.port.out.LoginSessionStore;
 import com.loresentry.authentication.application.port.out.OAuthStateStore;
 import com.loresentry.authentication.application.port.out.OidcClient;
@@ -29,6 +30,7 @@ public final class LoginService implements LoginUseCase {
     private final RegisterIdentityUseCase accountRegistration;
     private final SessionIdGenerator sessionIds;
     private final LoginSessionStore sessions;
+    private final TermsLoginGate terms;
 
     @Override
     public PreparedLogin prepare() {
@@ -45,6 +47,10 @@ public final class LoginService implements LoginUseCase {
             var identity = oidcClient.exchange(command.code(), loginState);
             // Account registration returns only after the DB transaction commits.
             var user = accountRegistration.register(identity);
+            var required = terms.check(user.id());
+            if (required.isPresent()) {
+                return LoginResult.termsRequired(required.get().id(), required.get().expiresAt());
+            }
             return createSession(user.id());
         } catch (PortFailure failure) {
             var reason =

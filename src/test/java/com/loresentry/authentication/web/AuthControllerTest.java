@@ -63,7 +63,9 @@ class AuthControllerTest {
                                 .content(
                                         "{\"login_request_id\":\"request\",\"state\":\"state\",\"code\":\"code\"}"))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.length()").value(3))
+                .andExpect(jsonPath("$.length()").value(4))
+                .andExpect(jsonPath("$.status").value("AUTHENTICATED"))
+                .andExpect(jsonPath("$.consent_request_id").doesNotExist())
                 .andExpect(jsonPath("$.session_id").value("A".repeat(43)))
                 .andExpect(jsonPath("$.expires_at").value(sessionExpiry.toString()))
                 .andExpect(jsonPath("$.login_request_consumed").value(true))
@@ -90,7 +92,9 @@ class AuthControllerTest {
                                 .content(
                                         "{\"login_request_id\":\"request\",\"state\":\"state\",\"code\":\"code\"}"))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.length()").value(3))
+                .andExpect(jsonPath("$.length()").value(4))
+                .andExpect(jsonPath("$.status").value("AUTHENTICATED"))
+                .andExpect(jsonPath("$.consent_request_id").doesNotExist())
                 .andExpect(jsonPath("$.session_id").value("A".repeat(43)))
                 .andExpect(jsonPath("$.access_token").doesNotExist())
                 .andExpect(jsonPath("$.refresh_token").doesNotExist())
@@ -99,6 +103,26 @@ class AuthControllerTest {
                         jsonPath("$.login_request_consumed")
                                 .value(org.hamcrest.Matchers.equalTo(expected)));
         verify(login).callback(new LoginUseCase.Callback("request", "state", "code", null));
+    }
+
+    @Test
+    void callbackReturnsPendingConsentWithoutSessionId() throws Exception {
+        when(login.callback(any()))
+                .thenReturn(
+                        LoginUseCase.LoginResult.termsRequired(
+                                new com.loresentry.authentication.domain.ConsentId("A".repeat(43)),
+                                sessionExpiry));
+        mvc.perform(
+                        post("/auth/oauth/google/callback")
+                                .contentType("application/json")
+                                .content(
+                                        "{\"login_request_id\":\"request\",\"state\":\"state\",\"code\":\"code\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.length()").value(4))
+                .andExpect(jsonPath("$.status").value("TERMS_REQUIRED"))
+                .andExpect(jsonPath("$.consent_request_id").value("A".repeat(43)))
+                .andExpect(jsonPath("$.session_id").doesNotExist())
+                .andExpect(jsonPath("$.login_request_consumed").value(true));
     }
 
     @Test
@@ -214,7 +238,7 @@ class AuthControllerTest {
                                 .content(
                                         "{\"login_request_id\":\"id\",\"state\":\"state\",\"code\":\"code\",\"error\":null}"))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.length()").value(3))
+                .andExpect(jsonPath("$.length()").value(4))
                 .andExpect(
                         jsonPath("$.login_request_consumed")
                                 .value(org.hamcrest.Matchers.nullValue()));

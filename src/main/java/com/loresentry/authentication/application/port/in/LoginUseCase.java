@@ -1,5 +1,6 @@
 package com.loresentry.authentication.application.port.in;
 
+import com.loresentry.authentication.domain.ConsentId;
 import com.loresentry.authentication.domain.SessionId;
 import java.net.URI;
 import java.time.Instant;
@@ -56,6 +57,44 @@ public interface LoginUseCase {
     }
 
     /** Confirmed session creation and OAuth consumption result. */
+    enum LoginStatus {
+        AUTHENTICATED,
+        TERMS_REQUIRED
+    }
+
     record LoginResult(
-            SessionId sessionId, Instant expiresAt, AuthFailure.Consumption consumption) {}
+            LoginStatus status,
+            SessionId sessionId,
+            ConsentId consentRequestId,
+            Instant expiresAt,
+            AuthFailure.Consumption consumption) {
+        public LoginResult {
+            if (status == null
+                    || expiresAt == null
+                    || consumption == null
+                    || (status == LoginStatus.AUTHENTICATED
+                            && (sessionId == null || consentRequestId != null))
+                    || (status == LoginStatus.TERMS_REQUIRED
+                            && (consentRequestId == null || sessionId != null)))
+                throw new IllegalArgumentException("Invalid login result");
+        }
+
+        public LoginResult(SessionId id, Instant expiresAt, AuthFailure.Consumption consumption) {
+            this(LoginStatus.AUTHENTICATED, id, null, expiresAt, consumption);
+        }
+
+        public static LoginResult termsRequired(ConsentId id, Instant expiresAt) {
+            return new LoginResult(
+                    LoginStatus.TERMS_REQUIRED,
+                    null,
+                    id,
+                    expiresAt,
+                    AuthFailure.Consumption.CONSUMED);
+        }
+
+        @Override
+        public String toString() {
+            return "LoginResult[redacted]";
+        }
+    }
 }

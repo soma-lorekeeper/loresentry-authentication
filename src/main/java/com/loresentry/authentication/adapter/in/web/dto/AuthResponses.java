@@ -19,11 +19,14 @@ public final class AuthResponses {
         }
     }
 
-    @JsonInclude(JsonInclude.Include.ALWAYS)
+    @JsonInclude(JsonInclude.Include.NON_NULL)
     public record Callback(
+            String status,
             @JsonProperty("session_id") String sessionId,
+            @JsonProperty("consent_request_id") String consentRequestId,
             @JsonProperty("expires_at") Instant expiresAt,
-            @JsonProperty("login_request_consumed") Boolean loginRequestConsumed) {
+            @JsonInclude(JsonInclude.Include.ALWAYS) @JsonProperty("login_request_consumed")
+                    Boolean loginRequestConsumed) {
         @Override
         public String toString() {
             return "Callback[REDACTED]";
