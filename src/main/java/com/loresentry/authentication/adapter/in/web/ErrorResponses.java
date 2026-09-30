@@ -15,6 +15,9 @@ public final class ErrorResponses {
         return switch (reason) {
             case INVALID_SESSION_ID -> new Contract(400, "Invalid session ID.", "NONE");
             case INVALID_REQUEST -> new Contract(400, "Invalid request.", "NONE");
+            case CONSENT_REQUEST_INVALID ->
+                    new Contract(401, "Consent request is invalid or expired.", "RESTART_LOGIN");
+            case TERMS_VERSION_MISMATCH -> new Contract(409, "Terms version has changed.", "NONE");
             case INVALID_DISPLAY_NAME -> new Contract(400, "Invalid display name.", "NONE");
             case OAUTH_REQUEST_INVALID ->
                     new Contract(400, "Login request is invalid or expired.", "RESTART_LOGIN");

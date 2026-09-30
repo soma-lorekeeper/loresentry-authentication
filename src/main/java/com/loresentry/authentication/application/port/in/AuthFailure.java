@@ -6,6 +6,8 @@ import java.util.Objects;
 public class AuthFailure extends RuntimeException {
     public enum Reason {
         INVALID_REQUEST,
+        CONSENT_REQUEST_INVALID,
+        TERMS_VERSION_MISMATCH,
         INVALID_SESSION_ID,
         INVALID_DISPLAY_NAME,
         OAUTH_REQUEST_INVALID,
