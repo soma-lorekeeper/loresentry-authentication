@@ -58,6 +58,45 @@ class MigrationTest {
         assertCurrentSchema(flyway, schema);
     }
 
+    @Test
+    void termsMigrationPreservesExistingAccountsAndDoesNotPublishDrafts() throws Exception {
+        var schema = "populated_v2_upgrade";
+        var previous =
+                Flyway.configure()
+                        .dataSource(
+                                postgres.getJdbcUrl(),
+                                postgres.getUsername(),
+                                postgres.getPassword())
+                        .schemas(schema)
+                        .target("2")
+                        .load();
+        previous.migrate();
+        try (var connection =
+                DriverManager.getConnection(
+                        postgres.getJdbcUrl(), postgres.getUsername(), postgres.getPassword())) {
+            connection.setSchema(schema);
+            var statement = connection.createStatement();
+            statement.execute(
+                    "INSERT INTO users VALUES ('00000000-0000-4000-8000-000000000001', 'Existing author', now(), now())");
+            statement.execute(
+                    "INSERT INTO oauth_identities VALUES ('GOOGLE', 'existing-subject', '00000000-0000-4000-8000-000000000001', 'author@example.test')");
+            assertThat(migrations(schema).migrate().migrationsExecuted).isEqualTo(1);
+            try (var rows =
+                    statement.executeQuery(
+                            "SELECT display_name, email FROM users JOIN oauth_identities ON users.id=oauth_identities.user_id")) {
+                assertThat(rows.next()).isTrue();
+                assertThat(rows.getString(1)).isEqualTo("Existing author");
+                assertThat(rows.getString(2)).isEqualTo("author@example.test");
+            }
+            for (var table : List.of("terms_versions", "user_terms_acceptances")) {
+                try (var rows = statement.executeQuery("SELECT count(*) FROM " + table)) {
+                    rows.next();
+                    assertThat(rows.getLong(1)).isZero();
+                }
+            }
+        }
+    }
+
     private Flyway migrations(String schema) {
         return Flyway.configure()
                 .dataSource(postgres.getJdbcUrl(), postgres.getUsername(), postgres.getPassword())
