@@ -50,6 +50,17 @@
 - `RedisConsentRequestStore`와 `redis/consent-request.lua`는 절대 만료·버전 갱신·일회 소비를 담당한다.
 - `TermsConfiguration`은 서비스와 동의 검사 활성화 설정을 연결한다.
 
+## 본인 계정·온보딩·탈퇴
+
+- [AccountController](../src/main/java/com/loresentry/authentication/adapter/in/web/AccountController.java)는
+  `X-User-Id`를 검증하고 조회·표시 이름 수정·온보딩 완료(`PUT /onboarding`)·탈퇴(`DELETE`)를 `AccountUseCase`에 전달한다.
+- [AccountService](../src/main/java/com/loresentry/authentication/application/service/AccountService.java)의
+  `completeOnboarding()`은 주입된 시각으로 최초 완료를 기록한다. `delete()`는
+  `LoginSessionStore.revokeUser()`로 세션 폐기를 확인한 뒤 `AccountStore.delete()`를 호출하고, 커밋 후 한 번 더 폐기한다.
+- `JpaAccountStore`·`AccountTransactions`의 `completeOnboarding()`·`delete()`가 조건부 UPDATE와
+  동의 기록·외부 신원·사용자 DELETE를 한 트랜잭션으로 실행한다.
+- `SessionIssuance.create()`는 세션 저장 후 계정 존재를 다시 확인하고, 탈퇴와 경합한 세션은 폐기한다.
+
 ## 세션 생성과 폐기
 
 - [SecureSessionIds](../src/main/java/com/loresentry/authentication/adapter/out/id/SecureSessionIds.java)는
@@ -57,6 +68,7 @@
 - [RedisLoginSessionStore](../src/main/java/com/loresentry/authentication/adapter/out/redis/RedisLoginSessionStore.java)는
   `LoginSessionStore`를 구현한다. `redis/login-session.lua`는 두 인덱스를 생성·교체하고,
   `redis/revoke-session.lua`는 입력 ID에 해당하는 세션만 조건부 폐기한다.
+  `redis/revoke-user-sessions.lua`는 탈퇴 시 사용자 인덱스와 그 인덱스가 가리키는 세션을 삭제한다.
 - [SessionController](../src/main/java/com/loresentry/authentication/adapter/in/web/SessionController.java)는
   폐기 요청을 `RevokeSessionService`에 전달한다. 서비스는 ID를 검증하고 제한된 예산 안에서 폐기를 재시도한다.
 
@@ -89,7 +101,8 @@
 ## 검증 위치
 
 - `LoginServiceTest`, `FailureRegressionTest`: 로그인 순서와 실패·소비 상태.
-- `SessionIdTest`, `LoginSessionStoreTest`, `RevokeSessionServiceTest`: ID 형식, Redis 인덱스·경쟁과 조건부 폐기.
+- `SessionIdTest`, `LoginSessionStoreTest`, `RevokeSessionServiceTest`: ID 형식, Redis 인덱스·경쟁과 조건부·사용자 단위 폐기.
+- `AccountServiceTest`, `AccountControllerTest`, `AccountDeletionFlowTest`: 온보딩 완료·탈퇴 순서, HTTP 계약과 DB·Redis 통합 흐름.
 - `GoogleOidcClientTest`: 인증 URL, PKCE·nonce, ID 토큰 검증과 통신 실패.
 - `AuthControllerTest`, `FullLoginFlowTest`: HTTP 계약과 통합 로그인 흐름.
 - `TermsSchemaTest`, `TermsVersionStoreTest`, `MigrationTest`: 원문·기록·마이그레이션.
