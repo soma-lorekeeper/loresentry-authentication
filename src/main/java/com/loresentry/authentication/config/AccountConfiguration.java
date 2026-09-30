@@ -4,6 +4,7 @@ import com.loresentry.authentication.adapter.out.id.UuidUserIdGenerator;
 import com.loresentry.authentication.application.port.in.AccountUseCase;
 import com.loresentry.authentication.application.port.in.RegisterIdentityUseCase;
 import com.loresentry.authentication.application.port.out.AccountStore;
+import com.loresentry.authentication.application.port.out.LoginSessionStore;
 import com.loresentry.authentication.application.port.out.UserIdGenerator;
 import com.loresentry.authentication.application.service.AccountService;
 import com.loresentry.authentication.application.service.RegistrationService;
@@ -25,7 +26,7 @@ public class AccountConfiguration {
     }
 
     @Bean
-    public AccountUseCase accounts(AccountStore accounts, Clock clock) {
-        return new AccountService(accounts, clock);
+    public AccountUseCase accounts(AccountStore accounts, LoginSessionStore sessions, Clock clock) {
+        return new AccountService(accounts, sessions, clock);
     }
 }

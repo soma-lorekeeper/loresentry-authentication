@@ -41,6 +41,14 @@ public class JpaAccountStore implements AccountStore {
         return invoke(() -> transactions.rename(id, name, time));
     }
 
+    public boolean completeOnboarding(UUID id, Instant time) {
+        return invoke(() -> transactions.completeOnboarding(id, time));
+    }
+
+    public boolean delete(UUID id) {
+        return invoke(() -> transactions.delete(id));
+    }
+
     private <T> T invoke(Supplier<T> operation) {
         try {
             return operation.get();

@@ -30,7 +30,8 @@ class AccountProfileTest extends DatabaseTestSupport {
         assertThat(next.createdAt()).isEqualTo(first.createdAt());
         assertThat(accounts.get(first.id()))
                 .isEqualTo(
-                        new AccountUseCase.Profile(first.id(), "chosen", "updated@example.test"));
+                        new AccountUseCase.Profile(
+                                first.id(), "chosen", "updated@example.test", false));
         registration.register(new OidcClient.Identity("google", subject, null, "  "));
         assertThat(accounts.get(first.id()).email()).isEqualTo("updated@example.test");
         var other =

@@ -14,6 +14,7 @@ import org.junit.jupiter.api.Test;
 class AccountServiceTest {
     private final Clock clock = Clock.fixed(Instant.parse("2026-09-17T00:00:00Z"), ZoneOffset.UTC);
     private final AccountStore store = mock(AccountStore.class);
+    private final LoginSessionStore sessions = mock(LoginSessionStore.class);
     private final UUID id = UUID.randomUUID();
 
     @Test
@@ -25,7 +26,7 @@ class AccountServiceTest {
                                 new AccountStore.Account(
                                         user, new OAuthIdentity("google", "subject", id, null))));
         assertThat(
-                        new AccountService(store, clock)
+                        new AccountService(store, sessions, clock)
                                 .rename(id, "  " + user.displayName() + "  ")
                                 .displayName())
                 .isEqualTo(user.displayName());
@@ -34,7 +35,7 @@ class AccountServiceTest {
 
     @Test
     void invalidNameDoesNotReachStoreAndMissingAccountDiffersFromStorageFailure() {
-        var service = new AccountService(store, clock);
+        var service = new AccountService(store, sessions, clock);
         for (var name : Arrays.asList(null, "   ", "😀".repeat(51))) {
             assertThatThrownBy(() -> service.rename(id, name))
                     .isInstanceOfSatisfying(
@@ -116,5 +117,90 @@ class AccountServiceTest {
         order.verify(store).findByIdentity("google", "id");
         order.verify(store).create(any(), any());
         order.verify(store).findByIdentity("google", "id");
+    }
+
+    @Test
+    void onboardingUsesInjectedTimeAndSeparatesMissingAccountFromStorageFailure() {
+        var service = new AccountService(store, sessions, clock);
+        when(store.completeOnboarding(id, clock.instant())).thenReturn(true, false);
+        service.completeOnboarding(id);
+        verify(store).completeOnboarding(id, clock.instant());
+        assertReason(() -> service.completeOnboarding(id), AuthFailure.Reason.USER_NOT_FOUND);
+        when(store.completeOnboarding(id, clock.instant())).thenThrow(unavailable());
+        assertReason(() -> service.completeOnboarding(id), AuthFailure.Reason.ACCOUNT_UNAVAILABLE);
+        assertReason(
+                () -> service.completeOnboarding(null), AuthFailure.Reason.USER_CONTEXT_REQUIRED);
+    }
+
+    @Test
+    void profileReportsOnboardingCompletionFromTheStoredTime() {
+        var service = new AccountService(store, sessions, clock);
+        var identity = new OAuthIdentity("google", "subject", id, null);
+        when(store.findById(id))
+                .thenReturn(
+                        Optional.of(
+                                new AccountStore.Account(
+                                        new User(id, "Name", Instant.EPOCH, Instant.EPOCH, null),
+                                        identity)),
+                        Optional.of(
+                                new AccountStore.Account(
+                                        new User(
+                                                id,
+                                                "Name",
+                                                Instant.EPOCH,
+                                                Instant.EPOCH,
+                                                Instant.EPOCH),
+                                        identity)));
+        assertThat(service.get(id).onboardingCompleted()).isFalse();
+        assertThat(service.get(id).onboardingCompleted()).isTrue();
+    }
+
+    @Test
+    void deletionRevokesSessionsBeforeAndAfterCommittingTheDelete() {
+        when(store.delete(id)).thenReturn(true);
+        new AccountService(store, sessions, clock).delete(id);
+        var order = inOrder(sessions, store);
+        order.verify(sessions).revokeUser(id);
+        order.verify(store).delete(id);
+        order.verify(sessions).revokeUser(id);
+    }
+
+    @Test
+    void unconfirmedRevocationKeepsTheAccount() {
+        doThrow(unavailable()).when(sessions).revokeUser(id);
+        assertReason(
+                () -> new AccountService(store, sessions, clock).delete(id),
+                AuthFailure.Reason.ACCOUNT_UNAVAILABLE);
+        verify(store, never()).delete(any());
+    }
+
+    @Test
+    void deletionFailuresAndMissingAccountsKeepTheirReasons() {
+        var service = new AccountService(store, sessions, clock);
+        when(store.delete(id)).thenReturn(false);
+        assertReason(() -> service.delete(id), AuthFailure.Reason.USER_NOT_FOUND);
+        verify(sessions, times(1)).revokeUser(id);
+        when(store.delete(id)).thenThrow(unavailable());
+        assertReason(() -> service.delete(id), AuthFailure.Reason.ACCOUNT_UNAVAILABLE);
+        assertReason(() -> service.delete(null), AuthFailure.Reason.USER_CONTEXT_REQUIRED);
+    }
+
+    @Test
+    void committedDeletionSucceedsWhenTheFollowUpRevocationFails() {
+        when(store.delete(id)).thenReturn(true);
+        doNothing().doThrow(unavailable()).when(sessions).revokeUser(id);
+        new AccountService(store, sessions, clock).delete(id);
+        verify(sessions, times(2)).revokeUser(id);
+    }
+
+    private static PortFailure unavailable() {
+        return new PortFailure(PortFailure.Kind.UNAVAILABLE, PortFailure.Execution.UNKNOWN, true);
+    }
+
+    private static void assertReason(Runnable call, AuthFailure.Reason reason) {
+        assertThatThrownBy(call::run)
+                .isInstanceOfSatisfying(
+                        AuthFailure.class,
+                        failure -> assertThat(failure.reason()).isEqualTo(reason));
     }
 }

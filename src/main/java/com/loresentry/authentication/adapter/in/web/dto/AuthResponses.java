@@ -35,5 +35,8 @@ public final class AuthResponses {
 
     @JsonInclude(JsonInclude.Include.ALWAYS)
     public record Profile(
-            UUID id, @JsonProperty("display_name") String displayName, String email) {}
+            UUID id,
+            @JsonProperty("display_name") String displayName,
+            String email,
+            @JsonProperty("onboarding_completed") boolean onboardingCompleted) {}
 }
