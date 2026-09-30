@@ -46,7 +46,7 @@ public final class TermsAcceptService implements TermsAcceptUseCase {
                 case CONSUMED -> {}
             }
             acceptances.accept(pending.userId(), version, clock.instant());
-            var issued = SessionIssuance.create(pending.userId(), ids, sessions);
+            var issued = SessionIssuance.create(pending.userId(), ids, sessions, accounts);
             return new Accepted(issued.id(), issued.expiresAt());
         } catch (AuthFailure failure) {
             throw failure;

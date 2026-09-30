@@ -11,6 +11,7 @@ import com.loresentry.authentication.domain.*;
 import java.time.*;
 import java.util.*;
 import org.junit.jupiter.api.*;
+import org.mockito.ArgumentCaptor;
 
 class TermsAcceptServiceTest {
     final ConsentRequestStore requests = mock(ConsentRequestStore.class);
@@ -45,7 +46,7 @@ class TermsAcceptServiceTest {
                 .thenReturn(
                         Optional.of(
                                 new AccountStore.Account(
-                                        new User(user, "Name", now, now),
+                                        new User(user, "Name", now, now, null),
                                         new OAuthIdentity("google", "subject", user, null))));
         when(versions.current(now))
                 .thenReturn(
@@ -96,6 +97,31 @@ class TermsAcceptServiceTest {
                 .thenReturn(ConsentRequestStore.Consumption.VERSION_MISMATCH);
         assertThatThrownBy(() -> service.accept(id.value(), version.toString()))
                 .hasMessage("TERMS_VERSION_MISMATCH");
+        verifyNoInteractions(acceptances, sessions);
+    }
+
+    @Test
+    void accountDeletedDuringIssuanceRevokesTheNewSession() {
+        when(accounts.findById(user))
+                .thenReturn(
+                        Optional.of(
+                                new AccountStore.Account(
+                                        new User(user, "Name", now, now, null),
+                                        new OAuthIdentity("google", "subject", user, null))),
+                        Optional.empty());
+        assertThatThrownBy(() -> service.accept(id.value(), version.toString()))
+                .hasMessage("LOGIN_UNAVAILABLE");
+        var issued = ArgumentCaptor.forClass(SessionId.class);
+        verify(sessions).replace(eq(user), issued.capture());
+        verify(sessions).revoke(issued.getValue());
+    }
+
+    @Test
+    void consentOfADeletedAccountIsInvalidWithoutConsumingIt() {
+        when(accounts.findById(user)).thenReturn(Optional.empty());
+        assertThatThrownBy(() -> service.accept(id.value(), version.toString()))
+                .hasMessage("CONSENT_REQUEST_INVALID");
+        verify(requests, never()).consume(any(), any(), any());
         verifyNoInteractions(acceptances, sessions);
     }
 

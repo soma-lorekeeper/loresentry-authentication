@@ -25,15 +25,16 @@ class AccountControllerTest {
 
     @Test
     void caseInsensitiveHeaderReturnsNullableEmailAndRenamesOnlyDisplayName() throws Exception {
-        when(accounts.get(id)).thenReturn(new AccountUseCase.Profile(id, "Name", null));
+        when(accounts.get(id)).thenReturn(new AccountUseCase.Profile(id, "Name", null, false));
         mvc.perform(get("/auth/users/me").header("x-uSeR-iD", id.toString()))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.length()").value(3))
+                .andExpect(jsonPath("$.length()").value(4))
                 .andExpect(jsonPath("$.id").value(id.toString()))
                 .andExpect(jsonPath("$.display_name").value("Name"))
-                .andExpect(jsonPath("$.email").value(org.hamcrest.Matchers.nullValue()));
+                .andExpect(jsonPath("$.email").value(org.hamcrest.Matchers.nullValue()))
+                .andExpect(jsonPath("$.onboarding_completed").value(false));
         when(accounts.rename(id, "New Name"))
-                .thenReturn(new AccountUseCase.Profile(id, "New Name", "test@example.com"));
+                .thenReturn(new AccountUseCase.Profile(id, "New Name", "test@example.com", true));
         mvc.perform(
                         patch("/auth/users/me")
                                 .header("X-User-Id", id.toString())
@@ -41,7 +42,8 @@ class AccountControllerTest {
                                 .content("{\"display_name\":\"New Name\"}"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.display_name").value("New Name"))
-                .andExpect(jsonPath("$.email").value("test@example.com"));
+                .andExpect(jsonPath("$.email").value("test@example.com"))
+                .andExpect(jsonPath("$.onboarding_completed").value(true));
         verify(accounts).rename(id, "New Name");
     }
 
@@ -112,5 +114,67 @@ class AccountControllerTest {
                                 .content("{\"display_name\":\" \"}"))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.code").value("INVALID_DISPLAY_NAME"));
+    }
+
+    @Test
+    void onboardingCompletionAndDeletionReturnNoContentWithoutCaching() throws Exception {
+        mvc.perform(put("/auth/users/me/onboarding").header("X-User-Id", id.toString()))
+                .andExpect(status().isNoContent())
+                .andExpect(header().string("Cache-Control", "no-store"))
+                .andExpect(content().string(""));
+        verify(accounts).completeOnboarding(id);
+        mvc.perform(delete("/auth/users/me").header("X-User-Id", id.toString()))
+                .andExpect(status().isNoContent())
+                .andExpect(header().string("Cache-Control", "no-store"))
+                .andExpect(content().string(""));
+        verify(accounts).delete(id);
+    }
+
+    @Test
+    void onboardingAndDeletionRequireOneValidUserHeader() throws Exception {
+        for (var request :
+                java.util.List.of(put("/auth/users/me/onboarding"), delete("/auth/users/me")))
+            mvc.perform(request)
+                    .andExpect(status().isUnauthorized())
+                    .andExpect(jsonPath("$.code").value("USER_CONTEXT_REQUIRED"));
+        for (var request :
+                java.util.List.of(
+                        put("/auth/users/me/onboarding").header("X-User-Id", "invalid"),
+                        delete("/auth/users/me").header("X-User-Id", "invalid"),
+                        delete("/auth/users/me")
+                                .header("X-User-Id", id.toString())
+                                .header("x-user-id", id.toString())))
+            mvc.perform(request)
+                    .andExpect(status().isBadRequest())
+                    .andExpect(jsonPath("$.code").value("INVALID_REQUEST"));
+        mvc.perform(post("/auth/users/me/onboarding").header("X-User-Id", id.toString()))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("INVALID_REQUEST"));
+        verifyNoInteractions(accounts);
+    }
+
+    @Test
+    void onboardingAndDeletionFailuresKeepTheirContract() throws Exception {
+        doThrow(new AuthFailure(AuthFailure.Reason.USER_NOT_FOUND))
+                .when(accounts)
+                .completeOnboarding(id);
+        mvc.perform(put("/auth/users/me/onboarding").header("X-User-Id", id.toString()))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.code").value("USER_NOT_FOUND"))
+                .andExpect(header().string("Cache-Control", "no-store"));
+        doThrow(
+                        new AuthFailure(AuthFailure.Reason.USER_NOT_FOUND),
+                        new AuthFailure(AuthFailure.Reason.ACCOUNT_UNAVAILABLE))
+                .when(accounts)
+                .delete(id);
+        mvc.perform(delete("/auth/users/me").header("X-User-Id", id.toString()))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.code").value("USER_NOT_FOUND"))
+                .andExpect(jsonPath("$.next_action").value("RELOGIN"));
+        mvc.perform(delete("/auth/users/me").header("X-User-Id", id.toString()))
+                .andExpect(status().isServiceUnavailable())
+                .andExpect(jsonPath("$.code").value("ACCOUNT_UNAVAILABLE"))
+                .andExpect(jsonPath("$.next_action").value("RETRY_LATER"))
+                .andExpect(header().string("Cache-Control", "no-store"));
     }
 }

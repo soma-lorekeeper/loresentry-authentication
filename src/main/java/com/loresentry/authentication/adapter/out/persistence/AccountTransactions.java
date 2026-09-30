@@ -4,6 +4,7 @@ import com.loresentry.authentication.application.port.out.AccountStore.Account;
 import com.loresentry.authentication.domain.*;
 import jakarta.persistence.EntityManager;
 import java.time.Instant;
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 import lombok.RequiredArgsConstructor;
@@ -60,6 +61,32 @@ public class AccountTransactions {
                             identity.getUser().rename(name, time);
                             return mapper.toAccount(identity);
                         });
+    }
+
+    @Transactional(rollbackFor = Exception.class, isolation = Isolation.READ_COMMITTED)
+    public boolean completeOnboarding(UUID userId, Instant time) {
+        return entityManager
+                        .createNativeQuery(
+                                "UPDATE users SET onboarding_completed_at = COALESCE(onboarding_completed_at, ?1) WHERE id = ?2")
+                        .setParameter(1, time)
+                        .setParameter(2, userId)
+                        .executeUpdate()
+                > 0;
+    }
+
+    @Transactional(rollbackFor = Exception.class, isolation = Isolation.READ_COMMITTED)
+    public boolean delete(UUID userId) {
+        for (var table : List.of("user_terms_acceptances", "oauth_identities")) {
+            entityManager
+                    .createNativeQuery("DELETE FROM " + table + " WHERE user_id = ?1")
+                    .setParameter(1, userId)
+                    .executeUpdate();
+        }
+        return entityManager
+                        .createNativeQuery("DELETE FROM users WHERE id = ?1")
+                        .setParameter(1, userId)
+                        .executeUpdate()
+                > 0;
     }
 
     private Optional<OAuthIdentityEntity> identityForUser(UUID userId) {

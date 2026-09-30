@@ -56,9 +56,9 @@ class AccountConcurrencyTest extends DatabaseTestSupport {
     void identityCollisionRollsBackNewUserBeforeReturningPortFailure() {
         var now = Instant.parse("2026-09-17T00:00:00Z");
         var subject = "collision-" + UUID.randomUUID();
-        var first = new User(ids.generate(), "first", now, now);
+        var first = new User(ids.generate(), "first", now, now, null);
         accounts.create(first, new OAuthIdentity("google", subject, first.id(), null));
-        var loser = new User(ids.generate(), "loser", now, now);
+        var loser = new User(ids.generate(), "loser", now, now, null);
         assertThatThrownBy(
                         () ->
                                 accounts.create(

@@ -38,6 +38,8 @@ Auth가 Google을 호출하는 방법은 [호출 API](API_CALLS.md)에서 관리
 | 세션 폐기 | `POST /sessions/revoke` | `session_id` | `204`, 본문 없음 |
 | 본인 계정 조회 | `GET /users/me` | `X-User-Id` | `200`, 계정 |
 | 표시 이름 수정 | `PATCH /users/me` | `X-User-Id`, `display_name` | `200`, 수정된 계정 |
+| 온보딩 완료 | `PUT /users/me/onboarding` | `X-User-Id`, 본문 없음 | `204`, 본문 없음 |
+| 회원 탈퇴 | `DELETE /users/me` | `X-User-Id` | `204`, 본문 없음 |
 
 활동 시 연장은 BFF의 공유 저장소 연산이며 별도 Auth HTTP API를 두지 않는다.
 약관 원문·동의 기록과 대기 저장은 [동의 설계](account/TERMS_CONSENT_DESIGN.md)를 따른다.
@@ -103,8 +105,37 @@ DB 커밋 후 실패는 [계정 유지 정책](login/LOGIN_FLOW.md#계정-생성
 
 ## 본인 계정
 
-응답은 `id`, `display_name`, `email`이며 이메일이 없으면 `null`이다.
+응답은 `id`, `display_name`, `email`, `onboarding_completed`이며 이메일이 없으면 `null`이다.
+`onboarding_completed`는 온보딩 완료 시각이 기록되어 있으면 `true`인 boolean이다.
+조회와 표시 이름 수정 응답에 모두 포함한다.
 수정은 `display_name`만 허용한다. [계정 규칙](account/AUTH_ERD.md#2-계정-저장-규칙)을 유지한다.
+
+### 온보딩 완료
+
+`PUT /auth/users/me/onboarding`은 본문을 받지 않고 `204`와 `Cache-Control: no-store`를 반환한다.
+완료 시각이 비어 있을 때만 현재 시각을 기록하므로 반복 호출해도 처음 완료 시각을 유지한다.
+도움말의 온보딩 다시 보기는 프론트 동작이며 이 값을 초기화하지 않는다.
+계정이 없으면 `404 USER_NOT_FOUND`, 저장소 장애는 `503 ACCOUNT_UNAVAILABLE`이다.
+
+### 회원 탈퇴
+
+`DELETE /auth/users/me`는 유예기간 없이 계정을 삭제하고 `204`와 `Cache-Control: no-store`를 반환한다.
+콘텐츠 데이터 삭제와 쿠키 삭제는 BFF가 조율하며, Auth는 아래 순서만 담당한다.
+
+1. `by-user` 인덱스로 현재 로그인 세션을 폐기한다. [세션 계약](session/SESSION_DESIGN.md#회원-탈퇴의-사용자-세션-폐기)을 따른다.
+2. 폐기를 확인한 뒤 한 트랜잭션에서 약관 동의 기록·외부 신원 연결·계정을 삭제한다.
+   공용 약관 원문(`terms_versions`)은 유지한다.
+3. 커밋 후 같은 폐기를 한 번 더 실행해 삭제 도중 발급된 세션을 제거한다. 이 단계의 실패는 응답을 바꾸지 않는다.
+
+세션 폐기를 확인하지 못하면 DB를 변경하지 않고 `503 ACCOUNT_UNAVAILABLE`을 반환한다.
+DB 삭제 실패도 같은 오류이며 트랜잭션이 롤백되므로 재시도할 수 있다. 계정이 이미 없으면
+`404 USER_NOT_FOUND`이며 BFF는 탈퇴 완료로 처리한다.
+
+탈퇴한 계정의 동의 대기는 사용자 UUID에 연결되어 있다. 조회·완료 시 계정을 확인하므로
+남은 대기는 `401 CONSENT_REQUEST_INVALID`로 거절되고 세션으로 완료되지 않는다.
+같은 Google 계정으로 다시 로그인하면 새 UUID의 신규 가입이 되며 새 동의가 필요하다.
+세션 발급 직후에도 계정 존재를 다시 확인해, 탈퇴와 경합한 로그인·동의 완료가 만든 세션은
+폐기하고 `503 LOGIN_UNAVAILABLE`로 응답한다.
 
 ## 오류 계약
 
@@ -113,7 +144,7 @@ next_action은 안내이며 세션 상태 변경이나 명령 실행 여부의 �
 
 | HTTP | code | 조건 | next_action |
 |---|---|---|---|
-| 400 | `INVALID_REQUEST` | JSON·필수 입력·헤더·수정 필드 오류 | `NONE` |
+| 400 | `INVALID_REQUEST` | JSON·필수 입력·헤더·수정 필드·지원하지 않는 메서드 오류 | `NONE` |
 | 400 | `INVALID_DISPLAY_NAME` | 표시 이름 검증 실패 | `NONE` |
 | 400 | `INVALID_SESSION_ID` | 폐기 ID 누락·형식 오류 | `NONE` |
 | 400 | `OAUTH_REQUEST_INVALID` | 임시 상태·브라우저 연결·state 검증 실패 | `RESTART_LOGIN` |
@@ -123,7 +154,7 @@ next_action은 안내이며 세션 상태 변경이나 명령 실행 여부의 �
 | 404 | `USER_NOT_FOUND` | 계정 없음 | `RELOGIN` |
 | 503 | `LOGIN_UNAVAILABLE` | DB·Redis·Google 장애 또는 세션 생성 결과 불명 | `RESTART_LOGIN` |
 | 503 | `REVOCATION_UNCONFIRMED` | 세션 폐기 완료 미확인 | `NONE` |
-| 503 | `ACCOUNT_UNAVAILABLE` | 계정 저장소 장애 | `RETRY_LATER` |
+| 503 | `ACCOUNT_UNAVAILABLE` | 계정 저장소 장애, 탈퇴 전 세션 폐기 미확인 | `RETRY_LATER` |
 | 500 | `INTERNAL_ERROR` | 로그인 생성 단계의 손상 레코드·내부 결함 등 미분류 오류 | `NONE` |
 
 BFF의 보호 요청 검증·연장 실패는 [BFF 제공 API](../../loresentry-gateway/docs/API.md#보호-api-인증-실패)의

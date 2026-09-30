@@ -12,7 +12,7 @@
 다른 서비스는 `users.id`를 값으로 참조하며 DB 간 외래 키는 두지 않는다.
 계정 저장은 Spring Data JPA·Hibernate, 스키마 변경은 Flyway SQL로 관리한다.
 
-아래는 현재 코드와 V2 마이그레이션이 사용하는 구조다.
+아래는 현재 코드와 V2·V5 마이그레이션이 사용하는 계정 구조다.
 DB 적용 전 [마이그레이션 실행 조건](#마이그레이션-실행-조건)을 확인한다.
 활성 세션과 OAuth 요청은 각각 [세션 계약](../session/SESSION_DESIGN.md)과
 [OAuth 임시 상태](../login/OAUTH_STATE.md)에서 관리한다.
@@ -28,6 +28,7 @@ erDiagram
         varchar(50) display_name
         timestamptz created_at
         timestamptz updated_at
+        timestamptz onboarding_completed_at "nullable"
     }
 
     oauth_identities {
@@ -50,6 +51,7 @@ ERD의 `0..N`은 DB에서 허용하는 관계이며, 계정 연결 기능 제공
 | `display_name` | `varchar(50)` | NOT NULL. 1~50자, 중복 허용. 사용자가 수정할 수 있는 표시 이름 |
 | `created_at` | `timestamptz` | NOT NULL. 최초 가입 시각 |
 | `updated_at` | `timestamptz` | NOT NULL. 사용자 정보의 마지막 수정 시각 |
+| `onboarding_completed_at` | `timestamptz` | NULL 허용. 처음 온보딩을 완료한 시각. 신규 계정은 NULL |
 
 ### `oauth_identities` — 소셜 로그인 정보
 
@@ -86,6 +88,12 @@ ERD의 `0..N`은 DB에서 허용하는 관계이며, 계정 연결 기능 제공
   빈 이름과 길이 초과는 오류로 처리하며, 다른 사용자와 같은 이름은 허용한다.
   표시 이름의 길이 계산과 자르기는 Unicode 코드 포인트를 기준으로 한다.
 - 가입 시 두 시각을 함께 설정하고, 사용자 정보가 변경되면 `updated_at`을 갱신한다.
+- 온보딩 완료는 `onboarding_completed_at`이 NULL일 때만 현재 시각을 기록한다.
+  이미 기록된 시각은 덮어쓰지 않으며 `updated_at`도 바꾸지 않는다. 다시 보기는 값을 초기화하지 않는다.
+- 회원 탈퇴는 로그인 세션 폐기를 확인한 뒤 한 트랜잭션에서 `user_terms_acceptances`,
+  `oauth_identities`, `users` 순으로 해당 사용자의 행을 삭제한다. 공용 `terms_versions`는 유지한다.
+  유예기간·소프트 삭제·별도 백업은 두지 않는다. 같은 외부 계정으로 다시 로그인하면 새 UUID로 가입한다.
+  순서와 오류는 [회원 탈퇴 API](../API.md#회원-탈퇴)를 따른다.
 
 ## 3. 영속성
 
@@ -135,7 +143,12 @@ Java 21에서는 `com.fasterxml.uuid:java-uuid-generator:5.2.0`을 사용한다.
 V2는 기존 V1 테이블이 비어 있다는 전제이며 계정·세션 데이터 이관을 포함하지 않는다.
 V2 적용 전 대상 테이블이 비어 있는지 확인한다. V1의 `uuidv7()` 때문에 PostgreSQL 18이 필요하다.
 
-현재 스키마는 [V2 SQL](../../src/main/resources/db/migration/V2__align_auth_accounts.sql)을 따른다.
+V3·V4는 약관 원문과 동의 기록을 추가한다. V5는 `users.onboarding_completed_at`을 추가하고
+적용 시점의 기존 계정을 모두 `created_at`으로 채운다. 기존 회원은 온보딩을 보지 않고,
+V5 이후 가입한 계정만 NULL로 시작한다.
+
+현재 스키마는 [V2 SQL](../../src/main/resources/db/migration/V2__align_auth_accounts.sql)과
+[V5 SQL](../../src/main/resources/db/migration/V5__add_user_onboarding_completion.sql)을 따른다.
 검증 방식은 [테스트 계획](../implementation/TEST_PLAN.md#마이그레이션-실행-방식)에서 관리한다.
 
 ### 엔티티 매핑
@@ -146,7 +159,7 @@ V2 적용 전 대상 테이블이 비어 있는지 확인한다. V1의 `uuidv7()
 | `oauth_identities` | `OAuthIdentityEntity`, `@EmbeddedId`로 복합 PK 매핑 |
 | 복합 키 | `OAuthIdentityId`에 `provider`, `providerId`. 두 필드 기반 `equals`·`hashCode` 구현 |
 | 사용자 참조 | `@ManyToOne(fetch = LAZY, optional = false)`와 `@JoinColumn(name = "user_id", nullable = false)` |
-| 생성·수정 시각 | Java `Instant`. UTC `Clock`으로 값을 설정하고 PostgreSQL `timestamptz`에 저장 |
+| 생성·수정·온보딩 완료 시각 | Java `Instant`. UTC `Clock`으로 값을 설정하고 PostgreSQL `timestamptz`에 저장 |
 
 사용자에서 소셜 정보로 향하는 역방향 컬렉션은 두지 않는다. 필요한 정보는 Repository 조회로 가져온다.
 연관관계의 자동 저장·삭제 전파와 orphan removal은 사용하지 않고 두 엔티티의 저장을 명시적으로 수행한다.
@@ -165,6 +178,8 @@ UUID와 복합 키를 저장 전에 할당하므로, 신규 생성은 `AccountTr
 변경 감지를 사용한다. 부분 필드만 채운 엔티티를 만들어 `save()`하지 않는다.
 본인 계정과 이메일 조회는 DTO projection 또는 필요한 연관관계의 명시적 조회로 처리한다.
 표시 이름·이메일 갱신 범위와 시각 변경은 [계정 저장 규칙](#2-계정-저장-규칙)을 따른다.
+온보딩 완료는 `COALESCE`를 쓴 조건부 UPDATE로, 탈퇴는 세 테이블의 DELETE로 한 트랜잭션에서 처리한다.
+영향 행 수로 계정 부재를 구분한다.
 
 ### 트랜잭션 Bean과 예외 변환
 

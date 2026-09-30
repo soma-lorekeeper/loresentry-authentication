@@ -65,4 +65,23 @@ public interface AccountStore {
      * @throws PortFailure 조회 또는 변경에 실패한 경우
      */
     Optional<Account> rename(UUID userId, String displayName, Instant updatedAt);
+
+    /**
+     * 온보딩 완료 시각이 비어 있을 때만 기록한다. 이미 완료한 계정은 처음 시각을 유지한다.
+     *
+     * @param userId 서비스 사용자 식별자
+     * @param completedAt 처음 완료로 기록할 시각
+     * @return 대상 계정이 있으면 true, 없으면 false
+     * @throws PortFailure 변경에 실패한 경우
+     */
+    boolean completeOnboarding(UUID userId, Instant completedAt);
+
+    /**
+     * 사용자의 약관 동의 기록, 외부 신원 연결과 사용자를 하나의 트랜잭션으로 삭제한다.
+     *
+     * @param userId 서비스 사용자 식별자
+     * @return 사용자를 삭제했으면 true, 대상이 없으면 false
+     * @throws PortFailure 삭제에 실패한 경우. 트랜잭션이 커밋되지 않았을 수 있다.
+     */
+    boolean delete(UUID userId);
 }

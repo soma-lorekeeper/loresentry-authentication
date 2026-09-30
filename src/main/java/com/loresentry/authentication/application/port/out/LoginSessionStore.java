@@ -12,4 +12,7 @@ public interface LoginSessionStore {
 
     /** Confirm the supplied ID is unusable without revoking a newer login. */
     void revoke(SessionId id);
+
+    /** Remove the user's active index and its session; absence is success. Never replayed. */
+    void revokeUser(UUID userId);
 }

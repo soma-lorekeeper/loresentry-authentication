@@ -2,7 +2,7 @@ package com.loresentry.authentication.application.port.in;
 
 import java.util.UUID;
 
-/** 호출자가 인증한 사용자 식별자로 프로필을 조회·수정하는 진입점이다. */
+/** 호출자가 인증한 사용자 식별자로 프로필을 조회·수정하고 온보딩 완료와 탈퇴를 처리하는 진입점이다. */
 public interface AccountUseCase {
     /**
      * 서비스 계정과 연결된 OAuth 신원의 이메일을 조회한다.
@@ -23,5 +23,23 @@ public interface AccountUseCase {
      */
     Profile rename(UUID userId, String displayName);
 
-    record Profile(UUID id, String displayName, String email) {}
+    /**
+     * 온보딩 완료를 기록한다. 이미 완료한 계정은 처음 완료 시각을 유지한다.
+     *
+     * @param userId 호출자가 인증한 사용자 식별자
+     * @throws AuthFailure 식별자가 없거나 계정이 없거나 저장에 실패한 경우
+     */
+    void completeOnboarding(UUID userId);
+
+    /**
+     * 사용자의 로그인 세션을 폐기한 뒤 약관 동의 기록·외부 신원 연결·계정을 삭제한다.
+     *
+     * <p>세션 폐기를 확인하지 못하면 계정을 삭제하지 않는다. 삭제된 계정에 남은 동의 대기는 계정 조회에서 거절되어 세션으로 완료되지 않는다.
+     *
+     * @param userId 호출자가 인증한 사용자 식별자
+     * @throws AuthFailure 식별자가 없거나 계정이 없거나 세션 폐기·삭제에 실패한 경우
+     */
+    void delete(UUID userId);
+
+    record Profile(UUID id, String displayName, String email, boolean onboardingCompleted) {}
 }

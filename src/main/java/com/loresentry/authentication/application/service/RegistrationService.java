@@ -32,7 +32,8 @@ public final class RegistrationService implements RegisterIdentityUseCase {
             var existing = accounts.findByIdentity(identity.provider(), identity.subject());
             if (existing.isPresent()) return refreshEmail(existing.get(), identity);
             var now = clock.instant().truncatedTo(java.time.temporal.ChronoUnit.MICROS);
-            var user = new User(ids.generate(), DisplayNames.initial(identity.name()), now, now);
+            var user =
+                    new User(ids.generate(), DisplayNames.initial(identity.name()), now, now, null);
             var email = hasEmail(identity.email()) ? identity.email() : null;
             try {
                 return accounts.create(

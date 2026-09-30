@@ -25,7 +25,7 @@ class MigrationTest {
         var flyway = migrations("fresh_install");
         var result = flyway.migrate();
         assertThat(result.success).isTrue();
-        assertThat(result.migrationsExecuted).isEqualTo(4);
+        assertThat(result.migrationsExecuted).isEqualTo(5);
         assertCurrentSchema(flyway, "fresh_install");
         assertThat(flyway.migrate().migrationsExecuted).isZero();
     }
@@ -48,7 +48,7 @@ class MigrationTest {
         var checksum = v1.info().current().getChecksum();
 
         var flyway = migrations(schema);
-        assertThat(flyway.migrate().migrationsExecuted).isEqualTo(3);
+        assertThat(flyway.migrate().migrationsExecuted).isEqualTo(4);
         assertThat(flyway.info().applied())
                 .filteredOn(
                         migration ->
@@ -104,7 +104,7 @@ class MigrationTest {
                 }
             }
             var flyway = migrations(schema);
-            assertThat(flyway.migrate().migrationsExecuted).isEqualTo(1);
+            assertThat(flyway.migrate().migrationsExecuted).isEqualTo(2);
             assertPublishedV0(connection);
             try (var rows = statement.executeQuery("SELECT count(*) FROM user_terms_acceptances")) {
                 rows.next();
@@ -128,6 +128,46 @@ class MigrationTest {
                 assertThat(rows.getTimestamp(3)).isEqualTo(effective);
                 assertThat(rows.next()).isFalse();
             }
+        }
+    }
+
+    @Test
+    void onboardingMigrationMarksOnlyExistingAccountsAsCompleted() throws Exception {
+        var schema = "populated_v4_upgrade";
+        Flyway.configure()
+                .dataSource(postgres.getJdbcUrl(), postgres.getUsername(), postgres.getPassword())
+                .schemas(schema)
+                .target("4")
+                .load()
+                .migrate();
+        try (var connection =
+                        DriverManager.getConnection(
+                                postgres.getJdbcUrl(),
+                                postgres.getUsername(),
+                                postgres.getPassword());
+                var statement = connection.createStatement()) {
+            connection.setSchema(schema);
+            statement.execute(
+                    "INSERT INTO users VALUES ('00000000-0000-4000-8000-000000000001', 'Existing author', '2026-01-02T03:04:05.123456Z', now())");
+            statement.execute(
+                    "INSERT INTO users VALUES ('00000000-0000-4000-8000-000000000002', 'Other author', '2026-05-06T07:08:09Z', now())");
+            assertThat(migrations(schema).migrate().migrationsExecuted).isEqualTo(1);
+            try (var rows =
+                    statement.executeQuery(
+                            "SELECT count(*), count(*) FILTER (WHERE onboarding_completed_at = created_at) FROM users")) {
+                rows.next();
+                assertThat(rows.getLong(1)).isEqualTo(2);
+                assertThat(rows.getLong(2)).isEqualTo(2);
+            }
+            statement.execute(
+                    "INSERT INTO users(id, display_name, created_at, updated_at) VALUES ('00000000-0000-4000-8000-000000000003', 'New author', now(), now())");
+            try (var rows =
+                    statement.executeQuery(
+                            "SELECT onboarding_completed_at FROM users WHERE id = '00000000-0000-4000-8000-000000000003'")) {
+                rows.next();
+                assertThat(rows.getTimestamp(1)).isNull();
+            }
+            assertThat(migrations(schema).migrate().migrationsExecuted).isZero();
         }
     }
 
@@ -169,7 +209,7 @@ class MigrationTest {
         assertThat(flyway.info().applied())
                 .filteredOn(migration -> migration.getVersion() != null)
                 .extracting(migration -> migration.getVersion().getVersion())
-                .containsExactly("1", "2", "3", "4");
+                .containsExactly("1", "2", "3", "4", "5");
         assertThat(tables(schema))
                 .containsExactlyInAnyOrder(
                         "flyway_schema_history",
@@ -192,7 +232,11 @@ class MigrationTest {
                 while (columns.next()) names.add(columns.getString(1));
                 assertThat(names)
                         .containsExactlyInAnyOrder(
-                                "id", "display_name", "created_at", "updated_at");
+                                "id",
+                                "display_name",
+                                "created_at",
+                                "updated_at",
+                                "onboarding_completed_at");
             }
         }
     }

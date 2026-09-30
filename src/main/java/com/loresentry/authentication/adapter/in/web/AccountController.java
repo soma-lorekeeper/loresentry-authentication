@@ -12,7 +12,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
 /**
- * BFF가 인증한 X-User-Id 헤더로 계정 프로필을 조회·수정한다.
+ * BFF가 인증한 X-User-Id 헤더로 계정 프로필을 조회·수정하고 온보딩 완료와 탈퇴를 처리한다.
  *
  * <p>이 컨트롤러는 AT를 검증하지 않는다. 헤더를 신뢰할 수 있도록 서비스 접근을 BFF로 제한하는 배포 구성이 전제되어야 한다.
  */
@@ -33,6 +33,22 @@ public class AccountController {
             HttpServletRequest request, @Valid @RequestBody AuthRequests.Rename body) {
         UUID id = userId(request);
         return profile(accounts.rename(id, body.displayName()));
+    }
+
+    @PutMapping("/onboarding")
+    public ResponseEntity<Void> completeOnboarding(HttpServletRequest request) {
+        accounts.completeOnboarding(userId(request));
+        return noContent();
+    }
+
+    @DeleteMapping
+    public ResponseEntity<Void> delete(HttpServletRequest request) {
+        accounts.delete(userId(request));
+        return noContent();
+    }
+
+    private static ResponseEntity<Void> noContent() {
+        return ResponseEntity.noContent().header("Cache-Control", "no-store").build();
     }
 
     private UUID userId(HttpServletRequest request) {
