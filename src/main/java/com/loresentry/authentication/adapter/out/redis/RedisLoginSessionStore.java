@@ -29,6 +29,7 @@ import tools.jackson.databind.json.JsonMapper;
 public final class RedisLoginSessionStore implements LoginSessionStore, AutoCloseable {
     private static final byte[] SCRIPT = loadScript("/redis/login-session.lua");
     private static final byte[] REVOKE = loadScript("/redis/revoke-session.lua");
+    private static final byte[] REVOKE_USER = loadScript("/redis/revoke-user-sessions.lua");
     private static final JsonMapper JSON =
             JsonMapper.builder()
                     .enable(StreamReadFeature.STRICT_DUPLICATE_DETECTION)
@@ -86,6 +87,52 @@ public final class RedisLoginSessionStore implements LoginSessionStore, AutoClos
                                     bytes(user.toString()),
                                     bytes(hash));
                 });
+    }
+
+    @Override
+    public void revokeUser(UUID userId) {
+        Objects.requireNonNull(userId);
+        execute(
+                (connection, beforeWrite) -> {
+                    var key = bytes("auth:session:{login}:by-user:" + userId);
+                    byte[] raw = connection.stringCommands().get(key);
+                    if (raw == null) return 0L;
+                    String hash = hashFrom(raw);
+                    beforeWrite.run();
+                    return hash == null
+                            ? connection
+                                    .scriptingCommands()
+                                    .eval(
+                                            REVOKE_USER,
+                                            ReturnType.INTEGER,
+                                            1,
+                                            key,
+                                            bytes(userId.toString()),
+                                            bytes(""))
+                            : connection
+                                    .scriptingCommands()
+                                    .eval(
+                                            REVOKE_USER,
+                                            ReturnType.INTEGER,
+                                            2,
+                                            key,
+                                            bytes("auth:session:{login}:by-id:" + hash),
+                                            bytes(userId.toString()),
+                                            bytes(hash));
+                });
+    }
+
+    private static String hashFrom(byte[] raw) {
+        try {
+            var node = JSON.readTree(raw);
+            if (!node.isObject()
+                    || !node.propertyNames().equals(Set.of("schema_version", "session_hash"))
+                    || !node.get("session_hash").isString()) return null;
+            String value = node.get("session_hash").asString();
+            return value.matches("[0-9a-f]{64}") ? value : null;
+        } catch (RuntimeException e) {
+            return null;
+        }
     }
 
     private static UUID userFrom(byte[] raw) {

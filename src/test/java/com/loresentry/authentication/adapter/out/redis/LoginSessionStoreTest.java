@@ -268,6 +268,62 @@ class LoginSessionStoreTest {
     }
 
     @Test
+    void userRevocationRemovesTheActiveSessionAndLeavesOtherUsersIntact() {
+        var user = UUID.randomUUID();
+        var other = UUID.randomUUID();
+        var old = ids.generate();
+        var current = ids.generate();
+        var foreign = ids.generate();
+        store.replace(user, old).orElseThrow();
+        store.replace(user, current).orElseThrow();
+        store.replace(other, foreign).orElseThrow();
+        store.revokeUser(user);
+        assertThat(redis.hasKey(PREFIX + "by-user:" + user)).isFalse();
+        assertThat(redis.hasKey(PREFIX + "by-id:" + current.hash())).isFalse();
+        assertThat(redis.hasKey(PREFIX + "by-id:" + old.hash())).isTrue();
+        assertThat(redis.opsForValue().get(PREFIX + "by-user:" + other)).contains(foreign.hash());
+        assertThat(redis.hasKey(PREFIX + "by-id:" + foreign.hash())).isTrue();
+        store.revokeUser(user);
+        store.revokeUser(UUID.randomUUID());
+        store.replace(user, ids.generate()).orElseThrow();
+    }
+
+    @Test
+    void userRevocationRemovesCorruptIndicesAndNeverAnotherUsersRecord() {
+        var user = UUID.randomUUID();
+        var other = UUID.randomUUID();
+        var index = PREFIX + "by-user:" + user;
+        for (var raw : List.of("broken", "{}", "{\"schema_version\":2,\"session_hash\":\"x\"}")) {
+            redis.opsForValue().set(index, raw, Duration.ofMinutes(1));
+            store.revokeUser(user);
+            assertThat(redis.hasKey(index)).isFalse();
+        }
+        var foreign = ids.generate();
+        store.replace(other, foreign).orElseThrow();
+        redis.opsForValue()
+                .set(
+                        index,
+                        "{\"schema_version\":2,\"session_hash\":\"" + foreign.hash() + "\"}",
+                        Duration.ofMinutes(1));
+        store.revokeUser(user);
+        assertThat(redis.hasKey(index)).isFalse();
+        assertThat(redis.hasKey(PREFIX + "by-id:" + foreign.hash())).isTrue();
+        assertThat(redis.opsForValue().get(PREFIX + "by-user:" + other)).contains(foreign.hash());
+    }
+
+    @Test
+    void unreachableUserRevocationFailsWithoutReportingSuccess() {
+        var mockFactory = mock(RedisConnectionFactory.class);
+        when(mockFactory.getConnection()).thenThrow(new QueryTimeoutException("down"));
+        try (var adapter = new RedisLoginSessionStore(new StringRedisTemplate(mockFactory))) {
+            assertThatThrownBy(() -> adapter.revokeUser(UUID.randomUUID()))
+                    .isInstanceOfSatisfying(
+                            PortFailure.class,
+                            e -> assertThat(e.kind()).isEqualTo(PortFailure.Kind.UNAVAILABLE));
+        }
+    }
+
+    @Test
     void aGetFinishingAfterTheDeadlineCannotStartRevocation() throws Exception {
         var mockFactory = mock(RedisConnectionFactory.class);
         var connection = mock(RedisConnection.class);
