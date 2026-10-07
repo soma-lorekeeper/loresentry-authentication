@@ -1,6 +1,7 @@
 package com.loresentry.authentication.db;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import java.sql.Connection;
 import java.sql.DriverManager;
@@ -25,7 +26,7 @@ class MigrationTest {
         var flyway = migrations("fresh_install");
         var result = flyway.migrate();
         assertThat(result.success).isTrue();
-        assertThat(result.migrationsExecuted).isEqualTo(5);
+        assertThat(result.migrationsExecuted).isEqualTo(8);
         assertCurrentSchema(flyway, "fresh_install");
         assertThat(flyway.migrate().migrationsExecuted).isZero();
     }
@@ -48,7 +49,7 @@ class MigrationTest {
         var checksum = v1.info().current().getChecksum();
 
         var flyway = migrations(schema);
-        assertThat(flyway.migrate().migrationsExecuted).isEqualTo(4);
+        assertThat(flyway.migrate().migrationsExecuted).isEqualTo(7);
         assertThat(flyway.info().applied())
                 .filteredOn(
                         migration ->
@@ -104,7 +105,7 @@ class MigrationTest {
                 }
             }
             var flyway = migrations(schema);
-            assertThat(flyway.migrate().migrationsExecuted).isEqualTo(2);
+            assertThat(flyway.migrate().migrationsExecuted).isEqualTo(5);
             assertPublishedV0(connection);
             try (var rows = statement.executeQuery("SELECT count(*) FROM user_terms_acceptances")) {
                 rows.next();
@@ -151,7 +152,7 @@ class MigrationTest {
                     "INSERT INTO users VALUES ('00000000-0000-4000-8000-000000000001', 'Existing author', '2026-01-02T03:04:05.123456Z', now())");
             statement.execute(
                     "INSERT INTO users VALUES ('00000000-0000-4000-8000-000000000002', 'Other author', '2026-05-06T07:08:09Z', now())");
-            assertThat(migrations(schema).migrate().migrationsExecuted).isEqualTo(1);
+            assertThat(migrations(schema).migrate().migrationsExecuted).isEqualTo(4);
             try (var rows =
                     statement.executeQuery(
                             "SELECT count(*), count(*) FILTER (WHERE onboarding_completed_at = created_at) FROM users")) {
@@ -168,6 +169,63 @@ class MigrationTest {
                 assertThat(rows.getTimestamp(1)).isNull();
             }
             assertThat(migrations(schema).migrate().migrationsExecuted).isZero();
+        }
+    }
+
+    @Test
+    void localeMigrationLeavesExistingAccountsUnsetAndAcceptsOnlyKoAndEn() throws Exception {
+        var schema = "populated_v5_upgrade";
+        Flyway.configure()
+                .dataSource(postgres.getJdbcUrl(), postgres.getUsername(), postgres.getPassword())
+                .schemas(schema)
+                .target("5")
+                .load()
+                .migrate();
+        try (var connection =
+                        DriverManager.getConnection(
+                                postgres.getJdbcUrl(),
+                                postgres.getUsername(),
+                                postgres.getPassword());
+                var statement = connection.createStatement()) {
+            connection.setSchema(schema);
+            statement.execute(
+                    "INSERT INTO users VALUES ('00000000-0000-4000-8000-000000000001', 'Existing author', now(), now(), now())");
+            assertThat(migrations(schema).migrate().migrationsExecuted).isEqualTo(3);
+            try (var rows = statement.executeQuery("SELECT locale FROM users")) {
+                rows.next();
+                assertThat(rows.getString(1)).isNull();
+            }
+            for (var locale : List.of("ko", "en"))
+                assertThat(statement.executeUpdate("UPDATE users SET locale = '" + locale + "'"))
+                        .isOne();
+            for (var locale : List.of("EN", "ja", "en-US", ""))
+                assertThatThrownBy(
+                                () ->
+                                        statement.executeUpdate(
+                                                "UPDATE users SET locale = '" + locale + "'"))
+                        .isInstanceOf(java.sql.SQLException.class)
+                        .extracting("SQLState")
+                        .isEqualTo("23514");
+            assertThatThrownBy(
+                            () ->
+                                    statement.executeUpdate(
+                                            "INSERT INTO terms_version_translations SELECT id, 'ko', title, content FROM terms_versions"))
+                    .isInstanceOf(java.sql.SQLException.class)
+                    .extracting("SQLState")
+                    .isEqualTo("23514");
+            assertThatThrownBy(
+                            () ->
+                                    statement.executeUpdate(
+                                            "INSERT INTO terms_version_translations SELECT id, 'en', title, content FROM terms_versions"))
+                    .isInstanceOf(java.sql.SQLException.class)
+                    .extracting("SQLState")
+                    .isEqualTo("23505");
+            statement.execute("DELETE FROM terms_versions");
+            try (var rows =
+                    statement.executeQuery("SELECT count(*) FROM terms_version_translations")) {
+                rows.next();
+                assertThat(rows.getLong(1)).isZero();
+            }
         }
     }
 
@@ -195,6 +253,36 @@ class MigrationTest {
             assertThat(rows.getBoolean(6)).isTrue();
             assertThat(rows.next()).isFalse();
         }
+        assertPublishedV0English(connection);
+    }
+
+    private void assertPublishedV0English(Connection connection) throws Exception {
+        try (var statement = connection.createStatement();
+                var rows =
+                        statement.executeQuery(
+                                "SELECT t.terms_version_id, t.locale, t.title, t.content, v.content, "
+                                        + "to_char(v.effective_at AT TIME ZONE 'Asia/Seoul', 'YYYY-MM-DD') "
+                                        + "FROM terms_version_translations t JOIN terms_versions v ON v.id = t.terms_version_id")) {
+            assertThat(rows.next()).isTrue();
+            assertThat(rows.getString(1)).isEqualTo("b226d203-1e9f-4435-8dc8-7a2dc9fcd505");
+            assertThat(rows.getString(2)).isEqualTo("en");
+            assertThat(rows.getString(3)).isEqualTo("Lore Sentry Terms of Service");
+            var content = rows.getString(4);
+            var original = rows.getString(5);
+            for (int article = 1; article <= 10; article++) {
+                assertThat(content).contains("Article " + article + ". ");
+            }
+            assertThat(content.split("\n\n")).hasSameSizeAs(original.split("\n\n"));
+            assertThat(content)
+                    .startsWith("Article 1. ")
+                    .contains("https://loresentry.com/policies/privacy.html", "tmdwn0509@gmail.com")
+                    .doesNotContainPattern("[가-힣]")
+                    .endsWith("Terms version: v0\nEffective date: " + rows.getString(6));
+            assertThat(content.split("https://loresentry.com/policies/privacy.html", -1))
+                    .hasSameSizeAs(
+                            original.split("https://loresentry.com/policies/privacy.html", -1));
+            assertThat(rows.next()).isFalse();
+        }
     }
 
     private Flyway migrations(String schema) {
@@ -209,13 +297,14 @@ class MigrationTest {
         assertThat(flyway.info().applied())
                 .filteredOn(migration -> migration.getVersion() != null)
                 .extracting(migration -> migration.getVersion().getVersion())
-                .containsExactly("1", "2", "3", "4", "5");
+                .containsExactly("1", "2", "3", "4", "5", "6", "7", "8");
         assertThat(tables(schema))
                 .containsExactlyInAnyOrder(
                         "flyway_schema_history",
                         "users",
                         "oauth_identities",
                         "terms_versions",
+                        "terms_version_translations",
                         "user_terms_acceptances");
         try (Connection connection =
                 DriverManager.getConnection(
@@ -236,7 +325,8 @@ class MigrationTest {
                                 "display_name",
                                 "created_at",
                                 "updated_at",
-                                "onboarding_completed_at");
+                                "onboarding_completed_at",
+                                "locale");
             }
         }
     }

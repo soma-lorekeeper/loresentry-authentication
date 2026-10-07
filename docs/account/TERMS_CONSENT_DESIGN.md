@@ -58,6 +58,27 @@ Auth PostgreSQL의 V3 마이그레이션이 다음 두 테이블을 생성한다
 호환되는 BFF·프론트가 준비되어 있어야 한다. 활성화 상태에서 적용 가능한 약관이 없으면 로그인을 완료하지 않고
 `LOGIN_UNAVAILABLE`을 반환한다. 배포 순서는 [배포·복구](../../../loresentry-gateway/docs/ROLLOUT.md#약관-동의-활성화)를 따른다.
 
+### 약관 번역
+
+원문은 한국어(`ko`)로 `terms_versions`에 저장하고, 번역은 V7이 만든 `terms_version_translations`에 둔다.
+
+| 컬럼 | 제약·역할 |
+|---|---|
+| `terms_version_id uuid` | FK → `terms_versions.id`, ON DELETE CASCADE |
+| `locale varchar(5)` | NOT NULL, CHECK `en`. 원문 언어 `ko`는 번역으로 저장하지 않음 |
+| `title text`, `content text` | NOT NULL. 번역한 제목과 일반 텍스트 전문 |
+
+PK는 `(terms_version_id, locale)`다. 번역은 새 약관 버전을 만들지 않으며 동의 기록은 언어와 관계없이
+같은 `terms_version_id`에 남는다. 현재 적용 버전 선택·동의 검사·완료는 번역을 참조하지 않는다.
+조회 API의 언어 선택과 원문 대체는 [Auth 제공 API](../API.md#약관-조회와-동의-완료)를 따른다.
+
+`v0` 영문 번역은 `V8__publish_service_terms_v0_en.sql`이 등록한다. 원문의 조항·문단·번호·URL을 그대로
+옮기고 의무를 추가·삭제·완화하지 않으며, 원문에 없는 우선 적용 조항도 두지 않는다. 개인정보 처리방침
+링크는 원문과 같은 `https://loresentry.com/policies/privacy.html`이고 CDN이 언어별 페이지를 제공한다.
+시행일은 마이그레이션 실행 시각이 아니라 원문 행의 `effective_at`을 한국 날짜로 표시한다.
+번역 등록·수정도 원문과 같이 새 Flyway 버전 SQL의 INSERT로 처리하고, 개정 원문을 등록할 때 번역을 함께 등록한다.
+번역이 없는 버전은 원문으로 응답하므로 번역 누락이 동의 절차를 막지 않는다.
+
 ## 2. Google 인증 이후의 동의 흐름
 
 1. `prepare`는 기존 OAuth 준비만 수행한다. 동의 ID나 약관 버전을 받지 않는다.

@@ -45,15 +45,19 @@
 
 - [TermsController](../src/main/java/com/loresentry/authentication/adapter/in/web/TermsController.java)는 조회·동의 요청을 서비스에 전달한다.
 - `TermsQueryService`는 현재 원문을 조회하고 대기의 대상 버전을 만료 연장 없이 갱신한다.
+  `locale` 쿼리가 `en`이면 `TermsVersionStore.translation()`으로 번역을 찾고, 그 밖의 값이나 번역 부재는 원문(`TermsVersion.original()`)을 쓴다.
 - `TermsAcceptService`는 대기를 일회 소비하고 동의 기록 커밋 후 `SessionIssuance.create()`를 호출한다.
-- `JdbcTermsVersionStore`·`JdbcTermsAcceptanceStore`는 원문 조회·동의 기록 저장을 담당한다.
+- `JdbcTermsVersionStore`·`JdbcTermsAcceptanceStore`는 원문·번역 조회와 동의 기록 저장을 담당한다.
 - `RedisConsentRequestStore`와 `redis/consent-request.lua`는 절대 만료·버전 갱신·일회 소비를 담당한다.
 - `TermsConfiguration`은 서비스와 동의 검사 활성화 설정을 연결한다.
 
 ## 본인 계정·온보딩·탈퇴
 
 - [AccountController](../src/main/java/com/loresentry/authentication/adapter/in/web/AccountController.java)는
-  `X-User-Id`를 검증하고 조회·표시 이름 수정·온보딩 완료(`PUT /onboarding`)·탈퇴(`DELETE`)를 `AccountUseCase`에 전달한다.
+  `X-User-Id`를 검증하고 조회·표시 이름 수정·언어 저장(`PUT /locale`)·온보딩 완료(`PUT /onboarding`)·탈퇴(`DELETE`)를 `AccountUseCase`에 전달한다.
+- `AccountService.changeLocale()`은 `SupportedLocale.find()`로 `ko`·`en`만 받아들이고, 그 밖의 값은 저장소를 호출하지 않고
+  `INVALID_REQUEST`로 거절한다. `UserEntity.changeLocale()`은 값이 바뀔 때만 수정 시각을 갱신한다.
+- 최초 표시 이름은 `RegistrationService`가 `DisplayNames.initial(name, email)`로 만든다. 이름이 없으면 이메일 앞부분, 그다음 `Writer`를 쓴다.
 - [AccountService](../src/main/java/com/loresentry/authentication/application/service/AccountService.java)의
   `completeOnboarding()`은 주입된 시각으로 최초 완료를 기록한다. `delete()`는
   `LoginSessionStore.revokeUser()`로 세션 폐기를 확인한 뒤 `AccountStore.delete()`를 호출하고, 커밋 후 한 번 더 폐기한다.
@@ -103,10 +107,12 @@
 - `LoginServiceTest`, `FailureRegressionTest`: 로그인 순서와 실패·소비 상태.
 - `SessionIdTest`, `LoginSessionStoreTest`, `RevokeSessionServiceTest`: ID 형식, Redis 인덱스·경쟁과 조건부·사용자 단위 폐기.
 - `AccountServiceTest`, `AccountControllerTest`, `AccountDeletionFlowTest`: 온보딩 완료·탈퇴 순서, HTTP 계약과 DB·Redis 통합 흐름.
+- `AccountServiceTest`, `AccountProfileTest`, `AccountControllerTest`, `LocaleFlowTest`: 계정 언어 저장·입력 오류, 표시 이름 대체값, 영문 약관 조회와 같은 버전 동의.
 - `GoogleOidcClientTest`: 인증 URL, PKCE·nonce, ID 토큰 검증과 통신 실패.
 - `AuthControllerTest`, `FullLoginFlowTest`: HTTP 계약과 통합 로그인 흐름.
 - `TermsSchemaTest`, `TermsVersionStoreTest`, `MigrationTest`: 원문·기록·마이그레이션.
 - `ConsentQueryTest`, `ConsentLoginFlowTest`, `TermsLoginServiceTest`, `TermsAcceptServiceTest`: 대기·로그인·동시 소비·실패 복구.
+- `TermsQueryServiceTest`, `ConsentQueryTest`: 약관 언어 선택, 알 수 없는 값과 번역 부재의 원문 대체, 번역 조회 실패.
 - `ArchitectureTest`: 계층 간 의존성 방향.
 
 실행 방법과 검증 범위는 [프로젝트 README](../README.md#test)를 따른다.

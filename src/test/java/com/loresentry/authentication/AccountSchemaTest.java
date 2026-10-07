@@ -30,7 +30,9 @@ class AccountSchemaTest extends DatabaseTestSupport {
         var tx = new TransactionTemplate(transactionManager);
         tx.executeWithoutResult(
                 status -> {
-                    var user = mapper.toEntity(new User(userId, "사용자", now, now, null));
+                    var user =
+                            mapper.toEntity(
+                                    new User(userId, "Writer", now, now, null, SupportedLocale.EN));
                     entityManager.persist(user);
                     for (var identity :
                             java.util.List.of(
@@ -53,7 +55,8 @@ class AccountSchemaTest extends DatabaseTestSupport {
                 });
         User loaded =
                 tx.execute(status -> mapper.toDomain(entityManager.find(UserEntity.class, userId)));
-        assertThat(loaded).isEqualTo(new User(userId, "사용자", now, now, null));
+        assertThat(loaded)
+                .isEqualTo(new User(userId, "Writer", now, now, null, SupportedLocale.EN));
         tx.executeWithoutResult(
                 status -> {
                     var link =

@@ -17,12 +17,15 @@ import org.springframework.test.context.jdbc.Sql;
 
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 @Import(HttpAuthTestSupport.GoogleHttpConfiguration.class)
-// Scenario originals replace v0 only for this test; the migration restores it afterward.
+// Scenario originals replace v0 only for this test; the migrations restore it and its translation.
 @Sql(
         statements =
                 "DELETE FROM terms_versions WHERE terms_type = 'SERVICE_TERMS' AND version = 'v0'")
 @Sql(
-        scripts = "/db/migration/V4__publish_service_terms_v0.sql",
+        scripts = {
+            "/db/migration/V4__publish_service_terms_v0.sql",
+            "/db/migration/V8__publish_service_terms_v0_en.sql"
+        },
         executionPhase = Sql.ExecutionPhase.AFTER_TEST_METHOD)
 class ConsentLoginFlowTest extends HttpAuthTestSupport {
     @Autowired JdbcTemplate jdbc;

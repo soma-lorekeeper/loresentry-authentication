@@ -19,7 +19,7 @@ class AccountServiceTest {
 
     @Test
     void renamePassesOnlyTrimmedNameAndInjectedTimeToPort() {
-        var user = new User(id, "😀".repeat(50), Instant.EPOCH, clock.instant(), null);
+        var user = new User(id, "😀".repeat(50), Instant.EPOCH, clock.instant(), null, null);
         when(store.rename(id, user.displayName(), clock.instant()))
                 .thenReturn(
                         Optional.of(
@@ -99,8 +99,71 @@ class AccountServiceTest {
     }
 
     @Test
+    void registrationFallsBackToTheEmailLocalPartAndThenToWriter() {
+        when(store.findByIdentity(eq("google"), any())).thenReturn(Optional.empty());
+        when(store.create(any(), any()))
+                .thenAnswer(
+                        call -> new AccountStore.Account(call.getArgument(0), call.getArgument(1)));
+        var service = new RegistrationService(store, UUID::randomUUID, clock);
+        var cases =
+                new String[][] {
+                    {"  Google Name  ", "writer@example.test", "Google Name"},
+                    {null, "  pen.name+tag@example.test", "pen.name+tag"},
+                    {"   ", "writer@example.test", "writer"},
+                    {null, "😀".repeat(51) + "@example.test", "😀".repeat(50)},
+                    {null, "@example.test", "Writer"},
+                    {null, "   @example.test", "Writer"},
+                    {null, "no-at-sign", "Writer"},
+                    {"", "  ", "Writer"},
+                    {null, null, "Writer"}
+                };
+        for (var value : cases) {
+            var user =
+                    service.register(
+                            new OidcClient.Identity(
+                                    "google", UUID.randomUUID().toString(), value[0], value[1]));
+            assertThat(user.displayName()).isEqualTo(value[2]);
+            assertThat(user.locale()).isNull();
+        }
+    }
+
+    @Test
+    void changeLocalePassesTheSupportedCodeAndInjectedTimeToPort() {
+        var user = new User(id, "Name", Instant.EPOCH, clock.instant(), null, SupportedLocale.EN);
+        when(store.changeLocale(id, SupportedLocale.EN, clock.instant()))
+                .thenReturn(
+                        Optional.of(
+                                new AccountStore.Account(
+                                        user, new OAuthIdentity("google", "subject", id, null))));
+        assertThat(new AccountService(store, sessions, clock).changeLocale(id, "en"))
+                .isEqualTo(new AccountUseCase.Profile(id, "Name", null, false, SupportedLocale.EN));
+        verify(store).changeLocale(id, SupportedLocale.EN, clock.instant());
+    }
+
+    @Test
+    void unsupportedLocaleIsAnInvalidRequestThatNeverReachesTheStore() {
+        var service = new AccountService(store, sessions, clock);
+        for (var locale : Arrays.asList(null, "", "EN", "Ko", " en", "en ", "en-US", "ja"))
+            assertReason(
+                    () -> service.changeLocale(id, locale), AuthFailure.Reason.INVALID_REQUEST);
+        assertReason(
+                () -> service.changeLocale(null, "en"), AuthFailure.Reason.USER_CONTEXT_REQUIRED);
+        verifyNoInteractions(store);
+    }
+
+    @Test
+    void changeLocaleSeparatesMissingAccountFromStorageFailure() {
+        var service = new AccountService(store, sessions, clock);
+        when(store.changeLocale(id, SupportedLocale.KO, clock.instant()))
+                .thenReturn(Optional.empty());
+        assertReason(() -> service.changeLocale(id, "ko"), AuthFailure.Reason.USER_NOT_FOUND);
+        when(store.changeLocale(id, SupportedLocale.KO, clock.instant())).thenThrow(unavailable());
+        assertReason(() -> service.changeLocale(id, "ko"), AuthFailure.Reason.ACCOUNT_UNAVAILABLE);
+    }
+
+    @Test
     void registrationRecoversDuplicateInNewPortCall() {
-        var user = new User(id, "kept", Instant.EPOCH, Instant.EPOCH, null);
+        var user = new User(id, "kept", Instant.EPOCH, Instant.EPOCH, null, null);
         var account = new AccountStore.Account(user, new OAuthIdentity("google", "id", id, null));
         when(store.findByIdentity("google", "id"))
                 .thenReturn(Optional.empty(), Optional.of(account));
@@ -140,7 +203,13 @@ class AccountServiceTest {
                 .thenReturn(
                         Optional.of(
                                 new AccountStore.Account(
-                                        new User(id, "Name", Instant.EPOCH, Instant.EPOCH, null),
+                                        new User(
+                                                id,
+                                                "Name",
+                                                Instant.EPOCH,
+                                                Instant.EPOCH,
+                                                null,
+                                                null),
                                         identity)),
                         Optional.of(
                                 new AccountStore.Account(
@@ -149,7 +218,8 @@ class AccountServiceTest {
                                                 "Name",
                                                 Instant.EPOCH,
                                                 Instant.EPOCH,
-                                                Instant.EPOCH),
+                                                Instant.EPOCH,
+                                                null),
                                         identity)));
         assertThat(service.get(id).onboardingCompleted()).isFalse();
         assertThat(service.get(id).onboardingCompleted()).isTrue();

@@ -36,8 +36,9 @@ class AccountDeletionFlowTest extends HttpAuthTestSupport {
         var user = acceptedLogin().user();
         var profile = call("GET", "/auth/users/me", null, user);
         assertThat(profile.status()).isEqualTo(200);
-        assertThat(profile.body().size()).isEqualTo(4);
+        assertThat(profile.body().size()).isEqualTo(5);
         assertThat(profile.body().get("onboarding_completed").booleanValue()).isFalse();
+        assertThat(profile.body().get("locale").isNull()).isTrue();
         var completed = call("PUT", "/auth/users/me/onboarding", null, user);
         assertThat(completed.status()).isEqualTo(204);
         assertThat(completed.headers().firstValue("Cache-Control")).contains("no-store");
@@ -100,7 +101,7 @@ class AccountDeletionFlowTest extends HttpAuthTestSupport {
         var user = accounts.findByIdentity("google", subject).orElseThrow().user().id();
         assertThat(call("DELETE", "/auth/users/me", null, user).status()).isEqualTo(204);
 
-        assertThatThrownBy(() -> terms.query(consent))
+        assertThatThrownBy(() -> terms.query(consent, null))
                 .isInstanceOfSatisfying(
                         AuthFailure.class,
                         e ->

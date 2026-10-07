@@ -64,6 +64,16 @@ public class AccountTransactions {
     }
 
     @Transactional(rollbackFor = Exception.class, isolation = Isolation.READ_COMMITTED)
+    public Optional<Account> changeLocale(UUID userId, SupportedLocale locale, Instant time) {
+        return identityForUser(userId)
+                .map(
+                        identity -> {
+                            identity.getUser().changeLocale(mapper.localeCode(locale), time);
+                            return mapper.toAccount(identity);
+                        });
+    }
+
+    @Transactional(rollbackFor = Exception.class, isolation = Isolation.READ_COMMITTED)
     public boolean completeOnboarding(UUID userId, Instant time) {
         return entityManager
                         .createNativeQuery(

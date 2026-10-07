@@ -49,22 +49,27 @@ public class TermsController {
             String version,
             String title,
             String content,
+            String locale,
             @JsonProperty("effective_at") Instant effectiveAt,
             @JsonProperty("expires_at") Instant expiresAt) {}
 
+    // locale은 응답 언어 선택에만 쓰며 잘못된 값도 오류 없이 원문으로 응답한다.
     @GetMapping
     public ResponseEntity<TermsResponse> get(
-            @RequestHeader(value = "X-Consent-Request-Id", required = false) String id) {
-        var view = query.query(id);
+            @RequestHeader(value = "X-Consent-Request-Id", required = false) String id,
+            @RequestParam(value = "locale", required = false) String locale) {
+        var view = query.query(id, locale);
         var terms = view.terms();
+        var text = view.text();
         return ResponseEntity.ok()
                 .header("Cache-Control", "no-store")
                 .body(
                         new TermsResponse(
                                 terms.id(),
                                 terms.version(),
-                                terms.title(),
-                                terms.content(),
+                                text.title(),
+                                text.content(),
+                                text.locale().code(),
                                 terms.effectiveAt(),
                                 view.expiresAt()));
     }

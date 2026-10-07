@@ -33,11 +33,12 @@ Auth가 Google을 호출하는 방법은 [호출 API](API_CALLS.md)에서 관리
 |---|---|---|---|
 | Google 로그인 준비 | `POST /oauth/google/prepare` | 빈 JSON 객체 | `200`, 준비 결과 |
 | Google 콜백 | `POST /oauth/google/callback` | 콜백 정보 | `200`, 로그인 완료 또는 동의 대기 |
-| 약관 조회 | `GET /terms` | `X-Consent-Request-Id` | `200`, 원문과 대기 만료 |
+| 약관 조회 | `GET /terms` | `X-Consent-Request-Id`, 선택 `locale` 쿼리 | `200`, 약관 본문과 대기 만료 |
 | 동의 완료 | `POST /terms/accept` | `consent_request_id`, `terms_version_id` | `200`, 새 세션 정보 |
 | 세션 폐기 | `POST /sessions/revoke` | `session_id` | `204`, 본문 없음 |
 | 본인 계정 조회 | `GET /users/me` | `X-User-Id` | `200`, 계정 |
 | 표시 이름 수정 | `PATCH /users/me` | `X-User-Id`, `display_name` | `200`, 수정된 계정 |
+| 계정 언어 저장 | `PUT /users/me/locale` | `X-User-Id`, `locale` | `200`, 수정된 계정 |
 | 온보딩 완료 | `PUT /users/me/onboarding` | `X-User-Id`, 본문 없음 | `204`, 본문 없음 |
 | 회원 탈퇴 | `DELETE /users/me` | `X-User-Id` | `204`, 본문 없음 |
 
@@ -74,14 +75,32 @@ DB 커밋 후 실패는 [계정 유지 정책](login/LOGIN_FLOW.md#계정-생성
 
 | 기능 | Auth 경로 | 내부 입력 | 성공 |
 |---|---|---|---|
-| 약관 조회 | `GET /auth/terms` | `X-Consent-Request-Id` 헤더 | `200`, 아래 약관 필드 |
+| 약관 조회 | `GET /auth/terms` | `X-Consent-Request-Id` 헤더, 선택 `locale` 쿼리 | `200`, 아래 약관 필드 |
 | 동의 완료 | `POST /auth/terms/accept` | JSON의 `consent_request_id`, `terms_version_id` | `200`, `session_id`, `expires_at` |
 
-조회 응답은 `terms_version_id`, `version`, `title`, `content`, `effective_at`, `expires_at`이다.
-마지막 필드는 동의 대기의 만료다. Auth는 현재 적용 원문을 반환하고 대기의 대상 버전을
+조회 응답은 `terms_version_id`, `version`, `title`, `content`, `locale`, `effective_at`, `expires_at`이다.
+마지막 필드는 동의 대기의 만료다. Auth는 현재 적용 버전을 반환하고 대기의 대상 버전을
 그 버전으로 갱신하되 만료는 유지한다. 조회 도중 소비된 대기를 재생성하지 않는다.
 
-완료 입력의 버전 ID는 사용자가 확인한 버전이다. Auth는 대기에 연결된 버전 및 현재 적용 버전과
+`locale` 쿼리가 정확히 `en`이고 반환할 버전에 `en` 번역이 있으면 `title`·`content`는 번역이다.
+쿼리 누락·`ko`·그 밖의 값(`EN`, `en-US` 등)이나 번역이 없는 버전은 오류 없이 한국어 원문을 반환한다.
+응답의 `locale`은 반환한 `title`·`content`의 언어로 `ko` 또는 `en`이다. 번역은 같은 버전에
+연결되며 `terms_version_id`·`version`·`effective_at`은 언어와 관계없이 같다. 번역 조회 실패는
+다른 조회 실패와 같이 `503 LOGIN_UNAVAILABLE`이며 대기를 갱신하지 않는다.
+
+```json
+{
+  "terms_version_id": "b226d203-1e9f-4435-8dc8-7a2dc9fcd505",
+  "version": "v0",
+  "title": "Lore Sentry Terms of Service",
+  "content": "Article 1. Purpose and service\n\n...",
+  "locale": "en",
+  "effective_at": "2026-10-07T00:00:00Z",
+  "expires_at": "2026-10-07T00:30:00Z"
+}
+```
+
+완료 입력의 버전 ID는 사용자가 확인한 버전이다. 번역을 확인했어도 같은 `terms_version_id`로 동의한다. Auth는 대기에 연결된 버전 및 현재 적용 버전과
 모두 일치할 때만 저장한다. 성공 응답은 `session_id`, `expires_at`이며 BFF 내부에서만 사용한다.
 
 ### 동의 오류
@@ -105,10 +124,31 @@ DB 커밋 후 실패는 [계정 유지 정책](login/LOGIN_FLOW.md#계정-생성
 
 ## 본인 계정
 
-응답은 `id`, `display_name`, `email`, `onboarding_completed`이며 이메일이 없으면 `null`이다.
+응답은 `id`, `display_name`, `email`, `onboarding_completed`, `locale`이며 이메일이 없으면 `null`이다.
 `onboarding_completed`는 온보딩 완료 시각이 기록되어 있으면 `true`인 boolean이다.
-조회와 표시 이름 수정 응답에 모두 포함한다.
+`locale`은 계정 언어 `ko`·`en`이며 기록한 적이 없으면 `null`이다. 모든 필드는 값이 없어도 생략하지 않는다.
+조회·표시 이름 수정·언어 저장 응답에 모두 포함한다.
 수정은 `display_name`만 허용한다. [계정 규칙](account/AUTH_ERD.md#2-계정-저장-규칙)을 유지한다.
+
+```json
+{
+  "id": "0199b7a0-0000-7000-8000-000000000001",
+  "display_name": "Writer",
+  "email": "writer@example.com",
+  "onboarding_completed": false,
+  "locale": null
+}
+```
+
+### 계정 언어
+
+`PUT /auth/users/me/locale`은 `{"locale": "en"}`처럼 `locale` 하나만 받는다. 성공하면 `200`,
+`Cache-Control: no-store`와 `GET /auth/users/me`와 같은 계정 본문을 반환한다. 저장된 값과 같으면
+수정 시각을 바꾸지 않으므로 반복 호출해도 된다. `X-User-Id` 처리는 다른 본인 계정 API와 같다.
+
+본문 누락, `locale` 누락·`null`·비문자열, 알 수 없는 필드, 정확히 `ko`·`en`이 아닌 값(`EN`, ` en`, `en-US` 등)은
+`400 INVALID_REQUEST`다. 계정이 없으면 `404 USER_NOT_FOUND`, 저장소 장애는 `503 ACCOUNT_UNAVAILABLE`이다.
+Auth는 언어를 저장·반환만 하며 화면 언어 선택과 최초 기록 시점은 BFF·프론트가 정한다.
 
 ### 온보딩 완료
 
@@ -144,7 +184,7 @@ next_action은 안내이며 세션 상태 변경이나 명령 실행 여부의 �
 
 | HTTP | code | 조건 | next_action |
 |---|---|---|---|
-| 400 | `INVALID_REQUEST` | JSON·필수 입력·헤더·수정 필드·지원하지 않는 메서드 오류 | `NONE` |
+| 400 | `INVALID_REQUEST` | JSON·필수 입력·헤더·수정 필드·계정 언어 값·지원하지 않는 메서드 오류 | `NONE` |
 | 400 | `INVALID_DISPLAY_NAME` | 표시 이름 검증 실패 | `NONE` |
 | 400 | `INVALID_SESSION_ID` | 폐기 ID 누락·형식 오류 | `NONE` |
 | 400 | `OAUTH_REQUEST_INVALID` | 임시 상태·브라우저 연결·state 검증 실패 | `RESTART_LOGIN` |

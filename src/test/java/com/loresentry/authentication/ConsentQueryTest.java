@@ -25,12 +25,15 @@ import org.springframework.test.web.servlet.MockMvc;
 
 @SpringBootTest
 @AutoConfigureMockMvc
-// Scenario originals replace v0 only for this test; the migration restores it afterward.
+// Scenario originals replace v0 only for this test; the migrations restore it and its translation.
 @Sql(
         statements =
                 "DELETE FROM terms_versions WHERE terms_type = 'SERVICE_TERMS' AND version = 'v0'")
 @Sql(
-        scripts = "/db/migration/V4__publish_service_terms_v0.sql",
+        scripts = {
+            "/db/migration/V4__publish_service_terms_v0.sql",
+            "/db/migration/V8__publish_service_terms_v0_en.sql"
+        },
         executionPhase = Sql.ExecutionPhase.AFTER_TEST_METHOD)
 class ConsentQueryTest extends DatabaseTestSupport {
     @Autowired JdbcTemplate jdbc;
@@ -163,15 +166,84 @@ class ConsentQueryTest extends DatabaseTestSupport {
         mvc.perform(get("/auth/terms").header("X-Consent-Request-Id", id.value()))
                 .andExpect(status().isOk())
                 .andExpect(header().string("Cache-Control", "no-store"))
-                .andExpect(jsonPath("$.length()").value(6))
+                .andExpect(jsonPath("$.length()").value(7))
                 .andExpect(jsonPath("$.terms_version_id").value(version.toString()))
                 .andExpect(jsonPath("$.content").value("Original\ntext"))
+                .andExpect(jsonPath("$.locale").value("ko"))
                 .andExpect(jsonPath("$.expires_at").value(pending.expiresAt().toString()));
         assertThat(redis.getExpire(key(), TimeUnit.MILLISECONDS))
                 .isPositive()
                 .isLessThanOrEqualTo(before);
         assertThat(requests.find(id).orElseThrow().termsVersionId()).isEqualTo(version);
         assertThat(redis.hasKey("auth:session:{login}:by-id:" + id.hash())).isFalse();
+    }
+
+    @Test
+    void englishTranslationIsServedOnlyForEnAndConsentStaysOnTheSameVersion() throws Exception {
+        jdbc.update(
+                "INSERT INTO terms_version_translations VALUES (?, 'en', 'Terms in English', ?)",
+                version,
+                "English\ntext");
+        var pending = requests.create(id, user, UUID.randomUUID()).orElseThrow();
+        mvc.perform(
+                        get("/auth/terms")
+                                .param("locale", "en")
+                                .header("X-Consent-Request-Id", id.value()))
+                .andExpect(status().isOk())
+                .andExpect(header().string("Cache-Control", "no-store"))
+                .andExpect(jsonPath("$.length()").value(7))
+                .andExpect(jsonPath("$.terms_version_id").value(version.toString()))
+                .andExpect(jsonPath("$.version").value(version.toString()))
+                .andExpect(jsonPath("$.title").value("Terms in English"))
+                .andExpect(jsonPath("$.content").value("English\ntext"))
+                .andExpect(jsonPath("$.locale").value("en"))
+                .andExpect(jsonPath("$.expires_at").value(pending.expiresAt().toString()));
+        assertThat(requests.find(id).orElseThrow().termsVersionId()).isEqualTo(version);
+        for (var locale : java.util.List.of("ko", "EN", "en-US", "fr", "", "en,ko"))
+            mvc.perform(
+                            get("/auth/terms")
+                                    .param("locale", locale)
+                                    .header("X-Consent-Request-Id", id.value()))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.title").value("Terms"))
+                    .andExpect(jsonPath("$.content").value("Original\ntext"))
+                    .andExpect(jsonPath("$.locale").value("ko"));
+        mvc.perform(
+                        get("/auth/terms")
+                                .param("locale", "en", "ko")
+                                .header("X-Consent-Request-Id", id.value()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.locale").value("ko"));
+        mvc.perform(
+                        post("/auth/terms/accept")
+                                .contentType("application/json")
+                                .content(
+                                        "{\"consent_request_id\":\""
+                                                + id.value()
+                                                + "\",\"terms_version_id\":\""
+                                                + version
+                                                + "\"}"))
+                .andExpect(status().isOk());
+        assertThat(acceptances.hasAccepted(user, version)).isTrue();
+        assertThat(
+                        jdbc.queryForObject(
+                                "SELECT count(*) FROM terms_versions WHERE version = ?",
+                                Long.class,
+                                version.toString()))
+                .isOne();
+    }
+
+    @Test
+    void englishRequestWithoutTranslationReturnsTheOriginal() throws Exception {
+        requests.create(id, user, version);
+        mvc.perform(
+                        get("/auth/terms")
+                                .param("locale", "en")
+                                .header("X-Consent-Request-Id", id.value()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.title").value("Terms"))
+                .andExpect(jsonPath("$.content").value("Original\ntext"))
+                .andExpect(jsonPath("$.locale").value("ko"));
     }
 
     @Test

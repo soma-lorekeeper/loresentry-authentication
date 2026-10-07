@@ -1,6 +1,7 @@
 package com.loresentry.authentication.application.port.out;
 
 import com.loresentry.authentication.domain.OAuthIdentity;
+import com.loresentry.authentication.domain.SupportedLocale;
 import com.loresentry.authentication.domain.User;
 import java.time.Instant;
 import java.util.Optional;
@@ -65,6 +66,17 @@ public interface AccountStore {
      * @throws PortFailure 조회 또는 변경에 실패한 경우
      */
     Optional<Account> rename(UUID userId, String displayName, Instant updatedAt);
+
+    /**
+     * 사용자의 언어를 변경한다. 저장된 값과 같으면 수정 시각을 유지한다.
+     *
+     * @param userId 서비스 사용자 식별자
+     * @param locale 저장할 언어
+     * @param updatedAt 값이 바뀔 때 기록할 사용자 수정 시각
+     * @return 커밋한 계정. 대상이 없으면 빈 Optional
+     * @throws PortFailure 조회 또는 변경에 실패한 경우
+     */
+    Optional<Account> changeLocale(UUID userId, SupportedLocale locale, Instant updatedAt);
 
     /**
      * 온보딩 완료 시각이 비어 있을 때만 기록한다. 이미 완료한 계정은 처음 시각을 유지한다.

@@ -2,6 +2,7 @@ package com.loresentry.authentication.adapter.out.persistence;
 
 import jakarta.persistence.*;
 import java.time.Instant;
+import java.util.Objects;
 import java.util.UUID;
 import lombok.AllArgsConstructor;
 import lombok.Getter;
@@ -26,10 +27,19 @@ public class UserEntity {
     @Column(name = "onboarding_completed_at")
     private Instant onboardingCompletedAt;
 
+    @Column(name = "locale", length = 5)
+    private String locale;
+
     protected UserEntity() {}
 
     public void rename(String name, Instant time) {
         displayName = name;
+        updatedAt = time;
+    }
+
+    public void changeLocale(String value, Instant time) {
+        if (Objects.equals(locale, value)) return;
+        locale = value;
         updatedAt = time;
     }
 

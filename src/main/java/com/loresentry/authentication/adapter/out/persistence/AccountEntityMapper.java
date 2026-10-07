@@ -2,6 +2,7 @@ package com.loresentry.authentication.adapter.out.persistence;
 
 import com.loresentry.authentication.application.port.out.AccountStore.Account;
 import com.loresentry.authentication.domain.OAuthIdentity;
+import com.loresentry.authentication.domain.SupportedLocale;
 import com.loresentry.authentication.domain.User;
 import org.mapstruct.Mapper;
 import org.mapstruct.Mapping;
@@ -30,4 +31,15 @@ public interface AccountEntityMapper {
 
     @Mapping(target = "identity", source = ".")
     Account toAccount(OAuthIdentityEntity identity);
+
+    default String localeCode(SupportedLocale locale) {
+        return locale == null ? null : locale.code();
+    }
+
+    // CHECK 제약 밖의 값은 손상 데이터이므로 저장소 장애로 전달한다.
+    default SupportedLocale locale(String code) {
+        if (code == null) return null;
+        return SupportedLocale.find(code)
+                .orElseThrow(() -> new IllegalStateException("Unsupported stored locale"));
+    }
 }
