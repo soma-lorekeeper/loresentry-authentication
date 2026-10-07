@@ -4,10 +4,12 @@ import static org.assertj.core.api.Assertions.*;
 
 import com.loresentry.authentication.adapter.out.google.*;
 import com.loresentry.authentication.application.port.out.*;
+import com.nimbusds.jwt.JWTClaimsSet;
 import java.net.URI;
 import java.net.http.*;
 import java.time.Clock;
 import java.util.*;
+import java.util.function.UnaryOperator;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.boot.test.web.server.LocalServerPort;
@@ -46,9 +48,15 @@ public abstract class HttpAuthTestSupport extends DatabaseTestSupport {
     }
 
     protected Result call(String method, String path, Object body, UUID user) {
+        return call(method, path, body, user, Map.of());
+    }
+
+    protected Result call(
+            String method, String path, Object body, UUID user, Map<String, String> headers) {
         try (var client = HttpClient.newHttpClient()) {
             var request = HttpRequest.newBuilder(URI.create("http://127.0.0.1:" + port + path));
             if (user != null) request.header("X-User-Id", user.toString());
+            headers.forEach(request::header);
             if (body != null) request.header("Content-Type", "application/json");
             request.method(
                     method,
@@ -66,6 +74,10 @@ public abstract class HttpAuthTestSupport extends DatabaseTestSupport {
     }
 
     protected Pending pending(String subject) {
+        return pending(subject, claims -> claims);
+    }
+
+    protected Pending pending(String subject, UnaryOperator<JWTClaimsSet.Builder> claims) {
         var prepared = call("POST", "/auth/oauth/google/prepare", Map.of(), null);
         assertThat(prepared.status()).isEqualTo(200);
         var id = prepared.body().get("login_request_id").asString();
@@ -76,7 +88,8 @@ public abstract class HttpAuthTestSupport extends DatabaseTestSupport {
         var code = UUID.randomUUID().toString();
         google.expectedVerifiers.put(code, states.find(id).orElseThrow().codeVerifier());
         google.tokens.put(
-                code, google.sign(google.claims(parameters.get("nonce"), subject).build()));
+                code,
+                google.sign(claims.apply(google.claims(parameters.get("nonce"), subject)).build()));
         return new Pending(id, parameters.get("state"), code);
     }
 

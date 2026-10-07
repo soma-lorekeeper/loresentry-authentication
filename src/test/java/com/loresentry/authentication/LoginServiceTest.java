@@ -35,7 +35,7 @@ class LoginServiceTest {
                     now,
                     now.plusSeconds(300));
     final OidcClient.Identity identity = new OidcClient.Identity("google", "subject", "Name", null);
-    final User user = new User(UUID.randomUUID(), "Name", now, now, null);
+    final User user = new User(UUID.randomUUID(), "Name", now, now, null, null);
     final SessionId sessionId = new SessionId("A".repeat(43));
     final Instant expiry = now.plusSeconds(1209600);
 

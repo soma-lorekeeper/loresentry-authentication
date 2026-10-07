@@ -41,6 +41,10 @@ public class JpaAccountStore implements AccountStore {
         return invoke(() -> transactions.rename(id, name, time));
     }
 
+    public Optional<Account> changeLocale(UUID id, SupportedLocale locale, Instant time) {
+        return invoke(() -> transactions.changeLocale(id, locale, time));
+    }
+
     public boolean completeOnboarding(UUID id, Instant time) {
         return invoke(() -> transactions.completeOnboarding(id, time));
     }

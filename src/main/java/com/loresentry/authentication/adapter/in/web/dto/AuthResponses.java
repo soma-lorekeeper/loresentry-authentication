@@ -38,5 +38,6 @@ public final class AuthResponses {
             UUID id,
             @JsonProperty("display_name") String displayName,
             String email,
-            @JsonProperty("onboarding_completed") boolean onboardingCompleted) {}
+            @JsonProperty("onboarding_completed") boolean onboardingCompleted,
+            String locale) {}
 }

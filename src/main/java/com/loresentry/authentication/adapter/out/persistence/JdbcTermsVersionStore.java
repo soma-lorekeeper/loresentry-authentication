@@ -2,6 +2,8 @@ package com.loresentry.authentication.adapter.out.persistence;
 
 import com.loresentry.authentication.application.port.out.PortFailure;
 import com.loresentry.authentication.application.port.out.TermsVersionStore;
+import com.loresentry.authentication.domain.SupportedLocale;
+import com.loresentry.authentication.domain.TermsText;
 import com.loresentry.authentication.domain.TermsVersion;
 import java.sql.Timestamp;
 import java.time.Instant;
@@ -35,8 +37,29 @@ public class JdbcTermsVersionStore implements TermsVersionStore {
                     .stream()
                     .findFirst();
         } catch (RuntimeException error) {
-            throw new PortFailure(
-                    PortFailure.Kind.UNAVAILABLE, PortFailure.Execution.UNKNOWN, false);
+            throw unavailable();
         }
+    }
+
+    @Override
+    public Optional<TermsText> translation(UUID termsVersionId, SupportedLocale locale) {
+        try {
+            return jdbc
+                    .query(
+                            "SELECT title, content FROM terms_version_translations WHERE terms_version_id = ? AND locale = ?",
+                            (rs, row) ->
+                                    new TermsText(
+                                            locale, rs.getString("title"), rs.getString("content")),
+                            termsVersionId,
+                            locale.code())
+                    .stream()
+                    .findFirst();
+        } catch (RuntimeException error) {
+            throw unavailable();
+        }
+    }
+
+    private PortFailure unavailable() {
+        return new PortFailure(PortFailure.Kind.UNAVAILABLE, PortFailure.Execution.UNKNOWN, false);
     }
 }

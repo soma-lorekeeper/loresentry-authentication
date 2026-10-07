@@ -46,7 +46,7 @@ class TermsAcceptServiceTest {
                 .thenReturn(
                         Optional.of(
                                 new AccountStore.Account(
-                                        new User(user, "Name", now, now, null),
+                                        new User(user, "Name", now, now, null, null),
                                         new OAuthIdentity("google", "subject", user, null))));
         when(versions.current(now))
                 .thenReturn(
@@ -106,7 +106,7 @@ class TermsAcceptServiceTest {
                 .thenReturn(
                         Optional.of(
                                 new AccountStore.Account(
-                                        new User(user, "Name", now, now, null),
+                                        new User(user, "Name", now, now, null, null),
                                         new OAuthIdentity("google", "subject", user, null))),
                         Optional.empty());
         assertThatThrownBy(() -> service.accept(id.value(), version.toString()))

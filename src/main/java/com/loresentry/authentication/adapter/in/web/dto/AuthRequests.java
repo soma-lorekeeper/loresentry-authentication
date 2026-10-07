@@ -38,4 +38,7 @@ public final class AuthRequests {
 
     // Blank/long names remain domain failures (INVALID_DISPLAY_NAME), not malformed requests.
     public record Rename(@JsonProperty("display_name") @NotNull String displayName) {}
+
+    // ko·en 외의 값은 애플리케이션이 INVALID_REQUEST로 거절한다.
+    public record ChangeLocale(@NotNull String locale) {}
 }
