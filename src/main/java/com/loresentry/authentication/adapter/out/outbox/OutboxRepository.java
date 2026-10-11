@@ -8,6 +8,7 @@ import java.util.UUID;
 import lombok.RequiredArgsConstructor;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.stereotype.Component;
+import org.springframework.transaction.annotation.Isolation;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -189,7 +190,7 @@ class OutboxRepository {
      * @param cutoff 이 시각보다 먼저 발행된 행을 지운다
      * @return 지운 행의 수
      */
-    @Transactional
+    @Transactional(rollbackFor = Exception.class, isolation = Isolation.READ_COMMITTED)
     int deletePublishedBefore(OffsetDateTime cutoff) {
         return jdbcClient
                 .sql("delete from outbox_events where published_at < :cutoff")

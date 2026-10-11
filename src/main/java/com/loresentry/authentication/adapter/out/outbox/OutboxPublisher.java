@@ -19,6 +19,7 @@ import org.springframework.core.NestedExceptionUtils;
 import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.kafka.support.SendResult;
 import org.springframework.stereotype.Component;
+import org.springframework.transaction.annotation.Isolation;
 import org.springframework.transaction.annotation.Transactional;
 
 /**
@@ -101,7 +102,7 @@ class OutboxPublisher {
      * @return 이 회차의 결과. 보낼 행이 없었거나 다른 인스턴스가 돌리고 있으면 {@link Outcome#IDLE}, 다시 보내야 할 실패가 있었으면 {@link
      *     Outcome#FAILED}, 그 밖에는 {@link Outcome#MORE} 다. 격리로 끝난 실패는 다시 보낼 것이 아니므로 FAILED 로 만들지 않는다
      */
-    @Transactional
+    @Transactional(rollbackFor = Exception.class, isolation = Isolation.READ_COMMITTED)
     Round publishBatch() {
         // 1. 다른 인스턴스가 이미 돌리고 있으면 이번 회차는 건너뛴다.
         if (!repository.tryRelayLock()) {

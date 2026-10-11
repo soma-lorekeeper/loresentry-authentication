@@ -1,5 +1,6 @@
 package com.loresentry.authentication.adapter.out.outbox;
 
+import java.time.Clock;
 import java.time.Duration;
 import java.time.OffsetDateTime;
 import lombok.RequiredArgsConstructor;
@@ -16,7 +17,7 @@ import org.springframework.stereotype.Component;
  * <p>relay({@link OutboxRelay})와 서로 방해하지 않는다. relay 는 아직 보내지 않은 행만 건드리고 이 작업은 발행된 지 오래된 행만 건드린다.
  * 스케줄러에서도 cron 작업은 별도의 thread 에서 돌아, 1초마다 도는 relay 를 기다리게 하지 않는다.
  *
- * <p>현재 시각은 직접 읽는다. 시간 계산이 뺄셈 한 번뿐이라, 테스트는 행의 시각을 지금 기준으로 잡으면 된다.
+ * <p>현재 시각은 직접 읽지 않고 주입받은 {@code Clock} 에서 읽는다. 이 저장소는 시간을 그렇게 다룬다. 운영에서는 앱이 함께 쓰는 UTC 시계다.
  */
 @Component
 @RequiredArgsConstructor
@@ -43,6 +44,9 @@ class OutboxPurge {
     /** outbox_events 를 읽고 쓰는 창구. 여기서는 삭제 하나만 쓴다. */
     private final OutboxRepository repository;
 
+    /** 지금 시각을 알려 주는 시계. 보존 기간을 뺄 기준 시각을 여기서 읽는다. */
+    private final Clock clock;
+
     /**
      * 스케줄러가 매일 한 번 부른다. 지우고, 결과를 한 줄 남긴다.
      *
@@ -58,7 +62,7 @@ class OutboxPurge {
         long startedAt = System.nanoTime();
         try {
             // 지금에서 보존 기간을 뺀 시각. 이보다 먼저 발행된 행이 지워진다.
-            OffsetDateTime cutoff = OffsetDateTime.now().minus(RETENTION);
+            OffsetDateTime cutoff = OffsetDateTime.now(clock).minus(RETENTION);
             int deleted = repository.deletePublishedBefore(cutoff);
             long took = Duration.ofNanos(System.nanoTime() - startedAt).toMillis();
             // 이 문구로 로그를 찾는다. 바꾸면 조회와 알림이 함께 깨진다. deleted 가 커지는 추세가 보이면 한 번에

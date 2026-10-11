@@ -6,6 +6,7 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
 import com.loresentry.authentication.support.DatabaseTestSupport;
+import java.time.Clock;
 import java.time.OffsetDateTime;
 import java.time.ZoneId;
 import java.time.ZoneOffset;
@@ -125,7 +126,7 @@ class OutboxPurgeTest extends DatabaseTestSupport {
                 .thenThrow(new IllegalStateException("database is down"));
 
         // 예외가 여기까지 올라오지 않는다.
-        new OutboxPurge(broken).run();
+        new OutboxPurge(broken, Clock.systemUTC()).run();
 
         assertThat(output.getOut())
                 .contains("outbox purge failed: reason=java.lang.IllegalStateException");

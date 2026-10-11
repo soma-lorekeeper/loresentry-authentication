@@ -1,6 +1,7 @@
 package com.loresentry.authentication.adapter.out.outbox;
 
 import com.loresentry.authentication.adapter.out.outbox.Round.Outcome;
+import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.InstantSource;
@@ -80,10 +81,13 @@ class OutboxRelay {
      * 운영에서 Spring 이 쓰는 생성자. 생성자가 둘이라 어느 쪽을 쓸지 {@code @Autowired} 로 알려 준다.
      *
      * <p>{@code publisher} 는 Spring 이 감싼 proxy 다. 그 메서드를 함수로 넘기면 호출이 proxy 를 거치므로 회차마다 트랜잭션이 열린다.
+     *
+     * <p>{@code clock} 은 앱이 함께 쓰는 시계다. 이 저장소는 시각을 직접 읽지 않고 {@code Clock} 을 주입받는다. {@code Clock} 은
+     * {@code InstantSource} 이기도 해서 그대로 넘긴다.
      */
     @Autowired
-    OutboxRelay(OutboxPublisher publisher) {
-        this(publisher::publishBatch, InstantSource.system());
+    OutboxRelay(OutboxPublisher publisher, Clock clock) {
+        this(publisher::publishBatch, clock);
     }
 
     /**
