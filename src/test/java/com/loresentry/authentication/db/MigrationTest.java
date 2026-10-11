@@ -26,7 +26,7 @@ class MigrationTest {
         var flyway = migrations("fresh_install");
         var result = flyway.migrate();
         assertThat(result.success).isTrue();
-        assertThat(result.migrationsExecuted).isEqualTo(8);
+        assertThat(result.migrationsExecuted).isEqualTo(9);
         assertCurrentSchema(flyway, "fresh_install");
         assertThat(flyway.migrate().migrationsExecuted).isZero();
     }
@@ -49,7 +49,7 @@ class MigrationTest {
         var checksum = v1.info().current().getChecksum();
 
         var flyway = migrations(schema);
-        assertThat(flyway.migrate().migrationsExecuted).isEqualTo(7);
+        assertThat(flyway.migrate().migrationsExecuted).isEqualTo(8);
         assertThat(flyway.info().applied())
                 .filteredOn(
                         migration ->
@@ -105,7 +105,7 @@ class MigrationTest {
                 }
             }
             var flyway = migrations(schema);
-            assertThat(flyway.migrate().migrationsExecuted).isEqualTo(5);
+            assertThat(flyway.migrate().migrationsExecuted).isEqualTo(6);
             assertPublishedV0(connection);
             try (var rows = statement.executeQuery("SELECT count(*) FROM user_terms_acceptances")) {
                 rows.next();
@@ -152,7 +152,7 @@ class MigrationTest {
                     "INSERT INTO users VALUES ('00000000-0000-4000-8000-000000000001', 'Existing author', '2026-01-02T03:04:05.123456Z', now())");
             statement.execute(
                     "INSERT INTO users VALUES ('00000000-0000-4000-8000-000000000002', 'Other author', '2026-05-06T07:08:09Z', now())");
-            assertThat(migrations(schema).migrate().migrationsExecuted).isEqualTo(4);
+            assertThat(migrations(schema).migrate().migrationsExecuted).isEqualTo(5);
             try (var rows =
                     statement.executeQuery(
                             "SELECT count(*), count(*) FILTER (WHERE onboarding_completed_at = created_at) FROM users")) {
@@ -190,7 +190,7 @@ class MigrationTest {
             connection.setSchema(schema);
             statement.execute(
                     "INSERT INTO users VALUES ('00000000-0000-4000-8000-000000000001', 'Existing author', now(), now(), now())");
-            assertThat(migrations(schema).migrate().migrationsExecuted).isEqualTo(3);
+            assertThat(migrations(schema).migrate().migrationsExecuted).isEqualTo(4);
             try (var rows = statement.executeQuery("SELECT locale FROM users")) {
                 rows.next();
                 assertThat(rows.getString(1)).isNull();
@@ -226,6 +226,71 @@ class MigrationTest {
                 rows.next();
                 assertThat(rows.getLong(1)).isZero();
             }
+        }
+    }
+
+    @Test
+    void outboxMigrationAddsAnEmptyOutboxThatNumbersEventsInInsertOrder() throws Exception {
+        var schema = "populated_v8_upgrade";
+        Flyway.configure()
+                .dataSource(postgres.getJdbcUrl(), postgres.getUsername(), postgres.getPassword())
+                .schemas(schema)
+                .target("8")
+                .load()
+                .migrate();
+        try (var connection =
+                        DriverManager.getConnection(
+                                postgres.getJdbcUrl(),
+                                postgres.getUsername(),
+                                postgres.getPassword());
+                var statement = connection.createStatement()) {
+            connection.setSchema(schema);
+            statement.execute(
+                    "INSERT INTO users(id, display_name, created_at, updated_at) VALUES ('00000000-0000-4000-8000-000000000001', 'Existing author', now(), now())");
+            assertThat(migrations(schema).migrate().migrationsExecuted).isEqualTo(1);
+            // 기존 계정은 그대로이고 outbox 는 빈 채로 시작한다. 이미 있던 계정의 이벤트를 지어내지 않는다.
+            try (var rows =
+                    statement.executeQuery(
+                            "SELECT (SELECT count(*) FROM users), (SELECT count(*) FROM outbox_events)")) {
+                rows.next();
+                assertThat(rows.getLong(1)).isOne();
+                assertThat(rows.getLong(2)).isZero();
+            }
+            // 쓰는 쪽이 주는 값은 종류, key, 대상, payload 넷뿐이다. 나머지는 테이블이 채운다.
+            for (var key : List.of("first", "second"))
+                statement.execute(
+                        "INSERT INTO outbox_events (event_type, event_key, aggregate_id, payload) VALUES ('UserDeleted', '"
+                                + key
+                                + "', '00000000-0000-4000-8000-000000000001', '{}')");
+            try (var rows =
+                    statement.executeQuery(
+                            "SELECT event_key, seq, id IS NOT NULL AND created_at IS NOT NULL, attempts, "
+                                    + "published_at IS NULL AND quarantined_at IS NULL AND last_error IS NULL AND traceparent IS NULL "
+                                    + "FROM outbox_events ORDER BY seq")) {
+                long previous = 0;
+                // seq 는 넣은 순서대로 커진다. relay 는 이 순서로 보낸다.
+                for (var key : List.of("first", "second")) {
+                    assertThat(rows.next()).isTrue();
+                    assertThat(rows.getString(1)).isEqualTo(key);
+                    assertThat(rows.getLong(2)).isGreaterThan(previous);
+                    previous = rows.getLong(2);
+                    assertThat(rows.getBoolean(3)).isTrue();
+                    assertThat(rows.getInt(4)).isZero();
+                    assertThat(rows.getBoolean(5)).isTrue();
+                }
+                assertThat(rows.next()).isFalse();
+            }
+            // relay 가 찾는 것은 아직 보내지 않았고 격리되지도 않은 행이다. 그 조건만 담은 부분 index 여야
+            // 발행된 행이 쌓여도 커지지 않는다.
+            try (var rows =
+                    statement.executeQuery(
+                            "SELECT indexdef FROM pg_indexes WHERE schemaname = current_schema() "
+                                    + "AND indexname = 'ix_outbox_events_pending'")) {
+                assertThat(rows.next()).isTrue();
+                assertThat(rows.getString(1))
+                        .contains("(seq)", "published_at IS NULL", "quarantined_at IS NULL");
+            }
+            assertThat(migrations(schema).migrate().migrationsExecuted).isZero();
         }
     }
 
@@ -297,7 +362,7 @@ class MigrationTest {
         assertThat(flyway.info().applied())
                 .filteredOn(migration -> migration.getVersion() != null)
                 .extracting(migration -> migration.getVersion().getVersion())
-                .containsExactly("1", "2", "3", "4", "5", "6", "7", "8");
+                .containsExactly("1", "2", "3", "4", "5", "6", "7", "8", "9");
         assertThat(tables(schema))
                 .containsExactlyInAnyOrder(
                         "flyway_schema_history",
@@ -305,7 +370,8 @@ class MigrationTest {
                         "oauth_identities",
                         "terms_versions",
                         "terms_version_translations",
-                        "user_terms_acceptances");
+                        "user_terms_acceptances",
+                        "outbox_events");
         try (Connection connection =
                 DriverManager.getConnection(
                         postgres.getJdbcUrl(), postgres.getUsername(), postgres.getPassword())) {
@@ -327,6 +393,29 @@ class MigrationTest {
                                 "updated_at",
                                 "onboarding_completed_at",
                                 "locale");
+            }
+            try (var columns =
+                    connection
+                            .createStatement()
+                            .executeQuery(
+                                    "select column_name from information_schema.columns "
+                                            + "where table_schema = current_schema() and table_name = 'outbox_events'")) {
+                List<String> names = new ArrayList<>();
+                while (columns.next()) names.add(columns.getString(1));
+                assertThat(names)
+                        .containsExactlyInAnyOrder(
+                                "id",
+                                "seq",
+                                "event_type",
+                                "event_key",
+                                "aggregate_id",
+                                "payload",
+                                "traceparent",
+                                "created_at",
+                                "published_at",
+                                "attempts",
+                                "last_error",
+                                "quarantined_at");
             }
         }
     }

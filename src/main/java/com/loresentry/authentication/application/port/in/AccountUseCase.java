@@ -47,6 +47,8 @@ public interface AccountUseCase {
      *
      * <p>세션 폐기를 확인하지 못하면 계정을 삭제하지 않는다. 삭제된 계정에 남은 동의 대기는 계정 조회에서 거절되어 세션으로 완료되지 않는다.
      *
+     * <p>계정을 삭제하면 UserDeleted 이벤트가 함께 기록되어 다른 서비스로 발행된다.
+     *
      * @param userId 호출자가 인증한 사용자 식별자
      * @throws AuthFailure 식별자가 없거나 계정이 없거나 세션 폐기·삭제에 실패한 경우
      */

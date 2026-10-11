@@ -100,6 +100,8 @@ ERD의 `0..N`은 DB에서 허용하는 관계이며, 계정 연결 기능 제공
 - 회원 탈퇴는 로그인 세션 폐기를 확인한 뒤 한 트랜잭션에서 `user_terms_acceptances`,
   `oauth_identities`, `users` 순으로 해당 사용자의 행을 삭제한다. 공용 `terms_versions`는 유지한다.
   유예기간·소프트 삭제·별도 백업은 두지 않는다. 같은 외부 계정으로 다시 로그인하면 새 UUID로 가입한다.
+  계정을 삭제했으면 같은 트랜잭션에서 `outbox_events`에 `UserDeleted` 이벤트 한 행을 기록한다.
+  payload는 `user_id`뿐이고, 계정이 이미 없어 삭제한 행이 없으면 기록하지 않는다.
   순서와 오류는 [회원 탈퇴 API](../API.md#회원-탈퇴)를 따른다.
 
 ## 3. 영속성
@@ -142,7 +144,8 @@ Java 21에서는 `com.fasterxml.uuid:java-uuid-generator:5.2.0`을 사용한다.
 - `spring.jpa.hibernate.ddl-auto=validate`로 설정한다. 테이블 생성·변경은 Flyway SQL 마이그레이션으로 관리한다.
 - Flyway는 `spring-boot-starter-flyway`와 PostgreSQL 지원 모듈을 사용하고 버전은 Boot가 관리한다.
   마이그레이션 경로는 `classpath:db/migration`이다. 적용한 파일은 수정하지 않고 새 버전 파일을 추가한다.
-- 계정 저장은 JPA로 처리한다. DB 연결 진단의 `JdbcClient`와 책임을 구분한다.
+- 계정 저장은 JPA로 처리한다. DB 연결 진단과 outbox relay의 `JdbcClient`와 책임을 구분한다.
+  `outbox_events`는 엔티티가 아니며 relay가 SQL로 잠그고 표시한다.
 
 ### 마이그레이션 실행 조건
 
@@ -155,6 +158,8 @@ V3·V4는 약관 원문과 동의 기록을 추가한다. V5는 `users.onboardin
 V5 이후 가입한 계정만 NULL로 시작한다. V6은 `users.locale`을 NULL 허용으로 추가하며
 기존 계정의 값을 채우지 않는다. 언어가 NULL인 계정은 프론트가 다음 로그인에서 기록한다.
 V7·V8은 약관 번역 테이블과 `v0` 영문 번역을 추가한다. 내용은 [약관 동의 설계](TERMS_CONSENT_DESIGN.md#약관-번역)를 따른다.
+V9는 다른 서비스로 발행할 이벤트를 담는 `outbox_events`를 추가한다. 기존 데이터를 바꾸지 않고 빈 테이블로 시작하며,
+이미 있던 계정에 대한 이벤트를 만들지 않는다. 컬럼의 뜻은 [V9 SQL](../../src/main/resources/db/migration/V9__create_outbox_events.sql)의 주석을 따른다.
 
 현재 스키마는 [V2 SQL](../../src/main/resources/db/migration/V2__align_auth_accounts.sql)과
 [V5 SQL](../../src/main/resources/db/migration/V5__add_user_onboarding_completion.sql)·
@@ -190,7 +195,8 @@ UUID와 복합 키를 저장 전에 할당하므로, 신규 생성은 `AccountTr
 본인 계정과 이메일 조회는 DTO projection 또는 필요한 연관관계의 명시적 조회로 처리한다.
 표시 이름·이메일 갱신 범위와 시각 변경은 [계정 저장 규칙](#2-계정-저장-규칙)을 따른다.
 언어 저장은 표시 이름과 같이 조회한 엔티티의 변경 감지를 사용하고, 값이 같으면 UPDATE가 발생하지 않는다.
-온보딩 완료는 `COALESCE`를 쓴 조건부 UPDATE로, 탈퇴는 세 테이블의 DELETE로 한 트랜잭션에서 처리한다.
+온보딩 완료는 `COALESCE`를 쓴 조건부 UPDATE로, 탈퇴는 세 테이블의 DELETE와 `outbox_events`의 INSERT로
+한 트랜잭션에서 처리한다.
 영향 행 수로 계정 부재를 구분한다.
 
 ### 트랜잭션 Bean과 예외 변환

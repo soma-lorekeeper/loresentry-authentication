@@ -113,6 +113,7 @@
 - `TermsSchemaTest`, `TermsVersionStoreTest`, `MigrationTest`: 원문·기록·마이그레이션.
 - `ConsentQueryTest`, `ConsentLoginFlowTest`, `TermsLoginServiceTest`, `TermsAcceptServiceTest`: 대기·로그인·동시 소비·실패 복구.
 - `TermsQueryServiceTest`, `ConsentQueryTest`: 약관 언어 선택, 알 수 없는 값과 번역 부재의 원문 대체, 번역 조회 실패.
+- `OutboxMessagesTest`, `OutboxPublisherTest`, `OutboxRelayTest`, `OutboxRelayEnabledTest`, `OutboxPurgeTest`: `UserDeleted` 레코드의 계약, 한 회차 발행과 실패 처리, relay 주기·backoff·종료, 발행된 행 정리.
 - `ArchitectureTest`: 계층 간 의존성 방향.
 
 실행 방법과 검증 범위는 [프로젝트 README](../README.md#test)를 따른다.
