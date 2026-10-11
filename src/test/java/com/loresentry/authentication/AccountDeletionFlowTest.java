@@ -93,6 +93,38 @@ class AccountDeletionFlowTest extends HttpAuthTestSupport {
         assertThat(fresh.onboardingCompletedAt()).isNull();
     }
 
+    /**
+     * 탈퇴하면 그 계정의 UserDeleted 이벤트가 outbox 에 정확히 하나 남는다. 삭제와 같은 트랜잭션에서 기록되므로, 계정이 지워졌다면 이벤트도 반드시 있다.
+     * 이미 없는 계정을 다시 지우면 지운 것이 없으므로 이벤트도 늘지 않는다.
+     *
+     * <p>다른 테스트도 계정을 지우며 outbox 에 행을 남기므로, 이 사용자의 행만 골라서 본다.
+     */
+    @Test
+    void withdrawalRecordsExactlyOneUserDeletedEventForThatAccount() {
+        var user = acceptedLogin().user();
+        assertThat(events(user)).isEmpty();
+
+        assertThat(call("DELETE", "/auth/users/me", null, user).status()).isEqualTo(204);
+
+        var events = events(user);
+        assertThat(events).hasSize(1);
+        var event = events.getFirst();
+        assertThat(event.get("event_type")).isEqualTo("UserDeleted");
+        // Kafka 의 key 와 이벤트의 대상은 둘 다 사용자 id 다.
+        assertThat(event.get("event_key")).isEqualTo(user.toString());
+        assertThat(event.get("aggregate_id")).isEqualTo(user);
+        // payload 는 계약의 {"user_id": "…"} 하나뿐이다. 이메일이나 이름은 싣지 않는다.
+        assertThat(event.get("user_id")).isEqualTo(user.toString());
+        assertThat(event.get("fields")).isEqualTo(1L);
+        // 아직 아무도 보내지 않은 상태로 남는다. 보내는 것은 relay 의 일이다.
+        assertThat(event.get("published_at")).isNull();
+        assertThat(event.get("quarantined_at")).isNull();
+        assertThat(event.get("attempts")).isEqualTo(0);
+
+        error(call("DELETE", "/auth/users/me", null, user), 404, "USER_NOT_FOUND", "RELOGIN");
+        assertThat(events(user)).hasSize(1);
+    }
+
     @Test
     void pendingConsentOfAWithdrawnAccountCannotCompleteIntoASession() {
         var pending = login(subject);
@@ -152,6 +184,16 @@ class AccountDeletionFlowTest extends HttpAuthTestSupport {
     private long count(String table, UUID user) {
         return jdbc.queryForObject(
                 "SELECT count(*) FROM " + table + " WHERE user_id = ?", Long.class, user);
+    }
+
+    /** 이 사용자를 대상으로 하는 outbox 행. payload 는 user_id 의 값과 필드 수로 풀어서 돌려준다. */
+    private List<Map<String, Object>> events(UUID user) {
+        return jdbc.queryForList(
+                "SELECT event_type, event_key, aggregate_id, payload ->> 'user_id' AS user_id, "
+                        + "(SELECT count(*) FROM jsonb_object_keys(payload)) AS fields, "
+                        + "published_at, quarantined_at, attempts "
+                        + "FROM outbox_events WHERE aggregate_id = ?",
+                user);
     }
 
     private Timestamp completedAt(UUID user) {

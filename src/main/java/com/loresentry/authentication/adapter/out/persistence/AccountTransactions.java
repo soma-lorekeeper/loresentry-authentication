@@ -92,11 +92,28 @@ public class AccountTransactions {
                     .setParameter(1, userId)
                     .executeUpdate();
         }
-        return entityManager
-                        .createNativeQuery("DELETE FROM users WHERE id = ?1")
-                        .setParameter(1, userId)
-                        .executeUpdate()
-                > 0;
+        boolean deleted =
+                entityManager
+                                .createNativeQuery("DELETE FROM users WHERE id = ?1")
+                                .setParameter(1, userId)
+                                .executeUpdate()
+                        > 0;
+        // 계정을 실제로 지웠을 때만 UserDeleted 이벤트를 outbox 에 남긴다. 삭제와 같은 트랜잭션이라 둘은 함께
+        // 확정되거나 함께 취소된다 — 계정은 사라졌는데 이벤트가 없거나, 그 반대인 상태가 생기지 않는다.
+        // Kafka 로 보내는 일은 여기서 하지 않는다. outbox relay 가 이 행을 읽어 나중에 발행한다.
+        if (deleted) {
+            entityManager
+                    .createNativeQuery(
+                            // key 와 대상(aggregate)은 둘 다 사용자 id 다. payload 는 계약의
+                            // {"user_id": "…"} 이고, 글자를 이어 붙이지 않고 DB 가 JSON 으로 만든다.
+                            "INSERT INTO outbox_events (event_type, event_key, aggregate_id, payload) "
+                                    + "VALUES ('UserDeleted', ?1, ?2, "
+                                    + "jsonb_build_object('user_id', CAST(?1 AS text)))")
+                    .setParameter(1, userId.toString())
+                    .setParameter(2, userId)
+                    .executeUpdate();
+        }
+        return deleted;
     }
 
     private Optional<OAuthIdentityEntity> identityForUser(UUID userId) {
