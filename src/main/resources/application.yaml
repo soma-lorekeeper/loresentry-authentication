@@ -18,6 +18,27 @@ spring:
       connection-timeout: 3000
       validation-timeout: 2000
       initialization-fail-timeout: -1
+  kafka:
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
+    client-id: ${KAFKA_CLIENT_ID:authentication}
+    admin:
+      # topic 은 gitops 의 KafkaTopic 선언이 만든다. 앱이 기동하며 topic 을 만들거나 고치지 않는다.
+      auto-create: false
+    producer:
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.apache.kafka.common.serialization.StringSerializer
+      # 모든 in-sync replica 가 받아야 성공으로 친다. outbox 의 발행 표시는 이 응답을 받은 뒤에만 한다.
+      acks: all
+      properties:
+        # 같은 producer 세션 안에서 재시도로 생기는 중복과 순서 뒤바뀜을 broker 가 막는다.
+        enable.idempotence: true
+        # send() 가 broker 정보나 버퍼의 빈자리를 기다리는 최대 시간. broker 에 닿지 못하면 여기서 실패한다.
+        max.block.ms: 5000
+        # 요청 하나를 보내고 broker 의 응답을 기다리는 최대 시간. 넘으면 다시 보낸다.
+        request.timeout.ms: 10000
+        # send() 가 돌아온 뒤 성공이나 실패가 확정되기까지의 최대 시간(재시도 포함).
+        # OutboxPublisher 가 결과를 기다리는 25초보다 짧아야 한다.
+        delivery.timeout.ms: 20000
 
 server:
   port: 8000
@@ -30,3 +51,10 @@ auth:
     client-id: ${AUTH_GOOGLE_CLIENT_ID:}
     client-secret: ${AUTH_GOOGLE_CLIENT_SECRET:}
     redirect-uri: ${AUTH_GOOGLE_REDIRECT_URI:}
+
+kafka:
+  producer:
+    relay:
+      # outbox relay 를 돌릴지. false 면 이벤트가 outbox 에 쌓이기만 하고 Kafka 로 나가지 않는다.
+      # 급히 멈춰야 할 때 Deployment 에 KAFKA_PRODUCER_RELAY_ENABLED=false 를 넣으면 코드 변경 없이 끌 수 있다.
+      enabled: ${KAFKA_PRODUCER_RELAY_ENABLED:true}
