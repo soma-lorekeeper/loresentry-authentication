@@ -145,7 +145,8 @@ Java 21에서는 `com.fasterxml.uuid:java-uuid-generator:5.2.0`을 사용한다.
 - Flyway는 `spring-boot-starter-flyway`와 PostgreSQL 지원 모듈을 사용하고 버전은 Boot가 관리한다.
   마이그레이션 경로는 `classpath:db/migration`이다. 적용한 파일은 수정하지 않고 새 버전 파일을 추가한다.
 - 계정 저장은 JPA로 처리한다. DB 연결 진단과 outbox relay의 `JdbcClient`와 책임을 구분한다.
-  `outbox_events`는 엔티티가 아니며 relay가 SQL로 잠그고 표시한다.
+  `outbox_events`는 엔티티가 아니며 `OutboxRepository.append()`가 SQL로 넣고 relay가 SQL로 잠그고 표시한다.
+  `append()`는 계정 삭제가 연 JPA 트랜잭션에 같은 connection으로 합류한다.
 
 ### 마이그레이션 실행 조건
 

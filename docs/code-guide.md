@@ -63,6 +63,10 @@
   `LoginSessionStore.revokeUser()`로 세션 폐기를 확인한 뒤 `AccountStore.delete()`를 호출하고, 커밋 후 한 번 더 폐기한다.
 - `JpaAccountStore`·`AccountTransactions`의 `completeOnboarding()`·`delete()`가 조건부 UPDATE와
   동의 기록·외부 신원·사용자 DELETE를 한 트랜잭션으로 실행한다.
+- `AccountTransactions.delete()`는 사용자를 지웠으면 같은 트랜잭션에서
+  [UserDeletedMessages.userDeleted()](../src/main/java/com/loresentry/authentication/adapter/out/event/UserDeletedMessages.java)로
+  메시지를 만들어 [OutboxRepository.append()](../src/main/java/com/loresentry/authentication/adapter/out/outbox/OutboxRepository.java)에 넘긴다.
+  payload의 모양은 `UserDeleted` record가 정한다.
 - `SessionIssuance.create()`는 세션 저장 후 계정 존재를 다시 확인하고, 탈퇴와 경합한 세션은 폐기한다.
 
 ## 세션 생성과 폐기
@@ -113,7 +117,7 @@
 - `TermsSchemaTest`, `TermsVersionStoreTest`, `MigrationTest`: 원문·기록·마이그레이션.
 - `ConsentQueryTest`, `ConsentLoginFlowTest`, `TermsLoginServiceTest`, `TermsAcceptServiceTest`: 대기·로그인·동시 소비·실패 복구.
 - `TermsQueryServiceTest`, `ConsentQueryTest`: 약관 언어 선택, 알 수 없는 값과 번역 부재의 원문 대체, 번역 조회 실패.
-- `OutboxMessagesTest`, `OutboxPublisherTest`, `OutboxRelayTest`, `OutboxRelayEnabledTest`, `OutboxPurgeTest`: `UserDeleted` 레코드의 계약, 한 회차 발행과 실패 처리, relay 주기·backoff·종료, 발행된 행 정리.
+- `OutboxAppendTest`, `OutboxMessagesTest`, `OutboxPublisherTest`, `OutboxRelayTest`, `OutboxRelayEnabledTest`, `OutboxPurgeTest`: outbox 쓰기와 트랜잭션 강제, `UserDeleted` 레코드의 계약, 한 회차 발행과 실패 처리, relay 주기·backoff·종료, 발행된 행 정리.
 - `ArchitectureTest`: 계층 간 의존성 방향.
 
 실행 방법과 검증 범위는 [프로젝트 README](../README.md#test)를 따른다.

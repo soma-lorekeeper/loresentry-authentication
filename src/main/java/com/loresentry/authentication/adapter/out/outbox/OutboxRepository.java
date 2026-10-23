@@ -11,9 +11,16 @@ import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Isolation;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
+import tools.jackson.databind.json.JsonMapper;
 
 /**
- * outbox_events 테이블을 relay 의 입장에서 읽고 쓴다. relay 의 한 회차는 아래 메서드를 이 순서로 부른다.
+ * outbox_events 테이블을 읽고 쓴다. 쓰는 쪽은 둘이다.
+ *
+ * <p><b>이벤트를 넣는 쪽</b>은 도메인 변경 트랜잭션(예: persistence 의 계정 삭제)이다. {@link #append(OutboxRecord...)} 하나만
+ * 부르고, 패키지 밖에서 부를 수 있는 것도 이 메서드뿐이다. 이벤트의 종류도 payload 의 모양도 모른다 — 받은 {@link OutboxRecord} 를 같은 방법으로
+ * 쓴다.
+ *
+ * <p><b>넣은 행을 보내는 쪽</b>은 relay 다. relay 의 한 회차는 아래 메서드를 이 순서로 부른다.
  *
  * <ol>
  *   <li>{@link #tryRelayLock()} — 이번 회차를 이 인스턴스가 돌려도 되는지 확인한다.
@@ -30,13 +37,10 @@ import org.springframework.transaction.annotation.Transactional;
  *
  * <p>{@link #deletePublishedBefore(OffsetDateTime)} 만 예외다. 회차와 무관하게 정리 작업({@link OutboxPurge})이 하루
  * 한 번 따로 부른다. 잠금에 기대지 않는 SQL 한 줄이라 스스로 트랜잭션을 연다.
- *
- * <p>outbox 에 행을 넣는 메서드는 여기에 없다. 넣는 곳은 이벤트를 만드는 변경과 같은 트랜잭션이어야 하므로, 계정 삭제의 트랜잭션(persistence 의
- * AccountTransactions.delete)이 직접 넣는다.
  */
 @Component
 @RequiredArgsConstructor
-class OutboxRepository {
+public class OutboxRepository {
 
     /**
      * relay 를 한 인스턴스만 돌게 하는 advisory lock 의 번호. DB 는 이 숫자가 무엇을 뜻하는지 모른다 — "relay 를 돌리려면 이 번호를 먼저
@@ -49,6 +53,40 @@ class OutboxRepository {
      * 쓴다. JPA 가 연 트랜잭션에 같은 connection 으로 합류한다.
      */
     private final JdbcClient jdbcClient;
+
+    /**
+     * {@link #append(OutboxRecord...)} 가 payload 를 JSON 글자로 바꿀 때 쓴다. 앱의 Jackson
+     * 설정(JacksonConfiguration)은 HTTP 요청을 읽는 규칙이라 쓰지 않고 따로 만든다 — 이벤트 계약의 모양이 HTTP 설정을 따라 바뀌지 않게 하려는
+     * 것이다. 값을 넣어 둔 final 필드라 Lombok 생성자의 인자가 되지 않는다.
+     */
+    private final JsonMapper json = JsonMapper.builder().build();
+
+    /**
+     * 메시지들을 도메인 변경과 같은 트랜잭션에서 쓴다. 트랜잭션 없이 불리면 실행하기 전에 예외를 던진다({@code MANDATORY}) — 따로 커밋되면 변경 없이
+     * 이벤트만 나가거나, 이벤트 없이 변경만 남는다.
+     *
+     * <p>행마다 payload 를 JSON 으로 바꿔 INSERT 한다. id, seq, created_at 은 DB 가 채우고, seq 는 INSERT 하는 순간
+     * 받으므로 넣은 순서가 곧 보낼 순서다.
+     *
+     * @param outboxRecords 쓸 메시지. 순서대로 쓴다
+     */
+    @Transactional(propagation = Propagation.MANDATORY)
+    public void append(OutboxRecord... outboxRecords) {
+        for (OutboxRecord outboxRecord : outboxRecords) {
+            // :payload::jsonb 는 글자로 넘긴 JSON 을 jsonb 컬럼에 맞게 바꾼다.
+            jdbcClient
+                    .sql(
+                            """
+                            insert into outbox_events (event_type, aggregate_id, event_key, payload)
+                            values (:type, :aggregate, :key, :payload::jsonb)
+                            """)
+                    .param("type", outboxRecord.eventType())
+                    .param("aggregate", outboxRecord.aggregateId())
+                    .param("key", outboxRecord.key())
+                    .param("payload", json.writeValueAsString(outboxRecord.payload()))
+                    .update();
+        }
+    }
 
     /**
      * relay 를 돌릴 권리를 얻어 본다. 한 회차를 시작할 때 가장 먼저 부른다.

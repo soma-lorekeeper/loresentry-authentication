@@ -1,5 +1,7 @@
 package com.loresentry.authentication.adapter.out.persistence;
 
+import com.loresentry.authentication.adapter.out.event.UserDeletedMessages;
+import com.loresentry.authentication.adapter.out.outbox.OutboxRepository;
 import com.loresentry.authentication.application.port.out.AccountStore.Account;
 import com.loresentry.authentication.domain.*;
 import jakarta.persistence.EntityManager;
@@ -24,6 +26,9 @@ public class AccountTransactions {
     private final EntityManager entityManager;
     private final IdentityRepository identities;
     private final AccountEntityMapper mapper;
+
+    /** 계정 삭제가 UserDeleted 를 같은 트랜잭션으로 outbox 에 쓴다. */
+    private final OutboxRepository outbox;
 
     @Transactional(readOnly = true)
     public Optional<Account> findByIdentity(String provider, String subject) {
@@ -102,16 +107,7 @@ public class AccountTransactions {
         // 확정되거나 함께 취소된다 — 계정은 사라졌는데 이벤트가 없거나, 그 반대인 상태가 생기지 않는다.
         // Kafka 로 보내는 일은 여기서 하지 않는다. outbox relay 가 이 행을 읽어 나중에 발행한다.
         if (deleted) {
-            entityManager
-                    .createNativeQuery(
-                            // key 와 대상(aggregate)은 둘 다 사용자 id 다. payload 는 계약의
-                            // {"user_id": "…"} 이고, 글자를 이어 붙이지 않고 DB 가 JSON 으로 만든다.
-                            "INSERT INTO outbox_events (event_type, event_key, aggregate_id, payload) "
-                                    + "VALUES ('UserDeleted', ?1, ?2, "
-                                    + "jsonb_build_object('user_id', CAST(?1 AS text)))")
-                    .setParameter(1, userId.toString())
-                    .setParameter(2, userId)
-                    .executeUpdate();
+            outbox.append(UserDeletedMessages.userDeleted(userId));
         }
         return deleted;
     }
