@@ -1,5 +1,7 @@
 package com.loresentry.authentication.adapter.out.persistence;
 
+import com.loresentry.authentication.adapter.out.event.UserDeletedMessages;
+import com.loresentry.authentication.adapter.out.outbox.OutboxRepository;
 import com.loresentry.authentication.application.port.out.AccountStore.Account;
 import com.loresentry.authentication.domain.*;
 import jakarta.persistence.EntityManager;
@@ -24,6 +26,9 @@ public class AccountTransactions {
     private final EntityManager entityManager;
     private final IdentityRepository identities;
     private final AccountEntityMapper mapper;
+
+    /** 계정 삭제가 UserDeleted 를 같은 트랜잭션으로 outbox 에 쓴다. */
+    private final OutboxRepository outbox;
 
     @Transactional(readOnly = true)
     public Optional<Account> findByIdentity(String provider, String subject) {
@@ -92,11 +97,19 @@ public class AccountTransactions {
                     .setParameter(1, userId)
                     .executeUpdate();
         }
-        return entityManager
-                        .createNativeQuery("DELETE FROM users WHERE id = ?1")
-                        .setParameter(1, userId)
-                        .executeUpdate()
-                > 0;
+        boolean deleted =
+                entityManager
+                                .createNativeQuery("DELETE FROM users WHERE id = ?1")
+                                .setParameter(1, userId)
+                                .executeUpdate()
+                        > 0;
+        // 계정을 실제로 지웠을 때만 UserDeleted 이벤트를 outbox 에 남긴다. 삭제와 같은 트랜잭션이라 둘은 함께
+        // 확정되거나 함께 취소된다 — 계정은 사라졌는데 이벤트가 없거나, 그 반대인 상태가 생기지 않는다.
+        // Kafka 로 보내는 일은 여기서 하지 않는다. outbox relay 가 이 행을 읽어 나중에 발행한다.
+        if (deleted) {
+            outbox.append(UserDeletedMessages.userDeleted(userId));
+        }
+        return deleted;
     }
 
     private Optional<OAuthIdentityEntity> identityForUser(UUID userId) {

@@ -91,6 +91,8 @@ public interface AccountStore {
     /**
      * 사용자의 약관 동의 기록, 외부 신원 연결과 사용자를 하나의 트랜잭션으로 삭제한다.
      *
+     * <p>사용자를 삭제했으면 같은 트랜잭션에서 UserDeleted 이벤트를 기록한다. 이벤트는 삭제가 커밋된 뒤 다른 서비스로 발행된다. 대상이 없으면 기록하지 않는다.
+     *
      * @param userId 서비스 사용자 식별자
      * @return 사용자를 삭제했으면 true, 대상이 없으면 false
      * @throws PortFailure 삭제에 실패한 경우. 트랜잭션이 커밋되지 않았을 수 있다.

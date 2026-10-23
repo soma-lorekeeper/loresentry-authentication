@@ -50,9 +50,11 @@ before starting the application; `.env` files are not loaded automatically.
 | Redis | `SPRING_DATA_REDIS_HOST`, `SPRING_DATA_REDIS_PORT`, `SPRING_DATA_REDIS_PASSWORD` when required |
 | Terms consent | `AUTH_TERMS_ENABLED` (default `true`; requires the published original and compatible BFF/frontend; an explicit environment value overrides the default) |
 | Google OAuth | `AUTH_GOOGLE_CLIENT_ID`, `AUTH_GOOGLE_CLIENT_SECRET`, `AUTH_GOOGLE_REDIRECT_URI` |
+| Kafka | `KAFKA_BOOTSTRAP_SERVERS` (default `localhost:9092`), `KAFKA_PRODUCER_RELAY_ENABLED` (default `true`; `false` leaves events in the outbox unpublished) |
 
 Defaults are PostgreSQL `localhost:5432/authentication`, user
-`authentication_svc`, and Redis `localhost:6379`. Register the browser-facing BFF
+`authentication_svc`, and Redis `localhost:6379`. Kafka is not needed to start: the
+outbox relay only contacts it after an account has been deleted. Register the browser-facing BFF
 callback in Google using the [Google request settings](docs/API_CALLS.md#google-요청-설정).
 
 After supplying the database password and Google configuration:

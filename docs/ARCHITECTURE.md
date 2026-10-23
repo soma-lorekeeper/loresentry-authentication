@@ -18,7 +18,7 @@
 | `application.port.out` | 계정 저장, OAuth 상태, 소셜 신원 검증, 세션 저장, 안전한 세션 ID 생성 |
 | `application.service` | 유스케이스 조율. domain과 포트에만 의존 |
 | `adapter.in.web` | HTTP DTO·검증·응답·오류 매핑 |
-| `adapter.out` | persistence·redis·google·id 등의 외부 경계 구현 |
+| `adapter.out` | persistence·redis·google·id·outbox·event 등의 외부 경계 구현 |
 | `config` | 설정 바인딩·검증과 구현체 연결 |
 
 코어는 Spring·JPA·Redis·HTTP 타입을 참조하지 않는다. 인터페이스는 유스케이스와
@@ -30,6 +30,14 @@
 계정은 JPA·Hibernate, OAuth 임시 상태와 세션은 Redis, Google 신원 검증은
 Spring Security OAuth2/OIDC를 사용한다. 소셜 신원 포트는 검증한 제공자·subject·이름·
 이메일만 반환하며 제공자 DTO와 JPA 엔티티를 코어에 노출하지 않는다.
+
+다른 서비스로 보내는 이벤트는 outbox를 거친다. 이벤트를 만드는 변경이 같은 트랜잭션에서 `outbox_events`에 행을 넣고,
+`adapter.out.outbox`의 relay가 그 행을 읽어 Kafka로 발행한다. 행을 넣을 때는 `adapter.out.event`의 topic별 factory
+(예: `UserDeletedMessages`)가 종류·대상·key·payload를 담은 `OutboxRecord`를 만들고, 변경 트랜잭션이 그것을
+`OutboxRepository.append()`에 넘긴다. `append()`는 이벤트의 종류를 모르고 받은 그대로 쓴다.
+relay는 포트와 서비스 없이 어댑터 안에서 끝난다.
+무엇을 발행할지는 행을 넣는 쪽이 정하고 relay는 옮기기만 하며, 한 회차가 하나의 DB 트랜잭션이라
+트랜잭션을 갖지 않는 서비스로 감쌀 내용이 없기 때문이다.
 
 웹 요청·응답은 Java record이며 Jackson으로 JSON 필드명을 매핑한다. Bean Validation으로
 [API 입력 조건](API.md#입력-검증)을 검사하고, 표시 이름의 업무 검증은 도메인에 둔다.
