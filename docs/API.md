@@ -40,6 +40,7 @@ Auth가 Google을 호출하는 방법은 [호출 API](API_CALLS.md)에서 관리
 | 표시 이름 수정 | `PATCH /users/me` | `X-User-Id`, `display_name` | `200`, 수정된 계정 |
 | 계정 언어 저장 | `PUT /users/me/locale` | `X-User-Id`, `locale` | `200`, 수정된 계정 |
 | 온보딩 완료 | `PUT /users/me/onboarding` | `X-User-Id`, 본문 없음 | `204`, 본문 없음 |
+| 유입 경로 기록 | `PUT /users/me/acquisition` | `X-User-Id`, 유입 경로 | `204`, 본문 없음 |
 | 회원 탈퇴 | `DELETE /users/me` | `X-User-Id` | `204`, 본문 없음 |
 
 활동 시 연장은 BFF의 공유 저장소 연산이며 별도 Auth HTTP API를 두지 않는다.
@@ -157,13 +158,48 @@ Auth는 언어를 저장·반환만 하며 화면 언어 선택과 최초 기록
 도움말의 온보딩 다시 보기는 프론트 동작이며 이 값을 초기화하지 않는다.
 계정이 없으면 `404 USER_NOT_FOUND`, 저장소 장애는 `503 ACCOUNT_UNAVAILABLE`이다.
 
+### 유입 경로 기록
+
+`PUT /auth/users/me/acquisition`은 가입한 사람이 어디서 들어왔는지를 한 번 기록하고 `204`와 `Cache-Control: no-store`를 반환한다.
+프론트가 처음 방문한 주소의 캠페인 파라미터와 referrer를 보관해 두었다가 신규 회원이 온보딩 화면에 처음 도착할 때 보낸다.
+모든 필드는 생략하거나 `null`일 수 있다. 빈 객체 `{}`도 받으며, 출처를 모르는 직접 방문으로 기록된다.
+
+| 필드 | 형식 |
+|---|---|
+| `utm_source`·`utm_medium`·`utm_campaign`·`utm_content` | 문자열, 100자 이하, 제어 문자 없음. 앞뒤 공백을 지우고 빈 값은 `null`로 저장 |
+| `utm_term` | 같은 규칙, 200자 이하 |
+| `click_id` | 광고 클릭 ID. `[A-Za-z0-9_-]`, 255자 이하 |
+| `click_id_type` | `gclid`·`gbraid`·`wbraid`. `click_id`와 함께 있거나 함께 없어야 한다 |
+| `referrer_host` | 외부 referrer의 호스트만. 소문자 호스트 이름, 253자 이하 |
+| `landing_path` | 처음 도착한 경로. `/`로 시작하고 쿼리·해시·공백이 없으며 255자 이하 |
+| `landed_at` | 처음 도착한 시각, ISO-8601 |
+
+```json
+{
+  "utm_source": "google",
+  "utm_medium": "cpc",
+  "utm_campaign": "23145678901",
+  "utm_term": "소설 에디터",
+  "click_id": "Cj0KCQjw…",
+  "click_id_type": "gclid",
+  "referrer_host": "www.google.com",
+  "landing_path": "/",
+  "landed_at": "2026-10-27T01:02:03.456Z"
+}
+```
+
+계정마다 처음 한 번만 기록하고, 온보딩을 마치기 전까지만 받는다. 이미 기록했거나 온보딩을 마친 계정의 요청은
+아무것도 바꾸지 않고 `204`를 반환하므로 반복 호출해도 된다. 형식 오류·알 수 없는 필드는 `400 INVALID_REQUEST`,
+계정이 없으면 `404 USER_NOT_FOUND`, 저장소 장애는 `503 ACCOUNT_UNAVAILABLE`이다.
+저장 위치는 [`user_acquisitions`](account/AUTH_ERD.md#user_acquisitions--가입-유입-경로)다.
+
 ### 회원 탈퇴
 
 `DELETE /auth/users/me`는 유예기간 없이 계정을 삭제하고 `204`와 `Cache-Control: no-store`를 반환한다.
 쿠키 삭제는 BFF가, 콘텐츠 데이터 삭제는 아래 `UserDeleted`를 구독하는 Content가 맡는다. Auth는 아래 순서만 담당한다.
 
 1. `by-user` 인덱스로 현재 로그인 세션을 폐기한다. [세션 계약](session/SESSION_DESIGN.md#회원-탈퇴의-사용자-세션-폐기)을 따른다.
-2. 폐기를 확인한 뒤 한 트랜잭션에서 약관 동의 기록·외부 신원 연결·계정을 삭제한다.
+2. 폐기를 확인한 뒤 한 트랜잭션에서 약관 동의 기록·외부 신원 연결·계정을 삭제한다. 유입 경로는 외래 키의 `ON DELETE CASCADE`로 함께 지워진다.
    공용 약관 원문(`terms_versions`)은 유지한다. 계정을 삭제했으면 같은 트랜잭션에서 `UserDeleted` 이벤트를 기록한다.
 3. 커밋 후 같은 폐기를 한 번 더 실행해 삭제 도중 발급된 세션을 제거한다. 이 단계의 실패는 응답을 바꾸지 않는다.
 

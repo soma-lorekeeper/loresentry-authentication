@@ -1,5 +1,6 @@
 package com.loresentry.authentication.application.port.in;
 
+import com.loresentry.authentication.domain.Acquisition;
 import com.loresentry.authentication.domain.SupportedLocale;
 import java.util.UUID;
 
@@ -41,6 +42,8 @@ public interface AccountUseCase {
      * @throws AuthFailure 식별자가 없거나 계정이 없거나 저장에 실패한 경우
      */
     void completeOnboarding(UUID userId);
+
+    void recordAcquisition(UUID userId, Acquisition acquisition);
 
     /**
      * 사용자의 로그인 세션을 폐기한 뒤 약관 동의 기록·외부 신원 연결·계정을 삭제한다.

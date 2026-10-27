@@ -22,6 +22,7 @@ DB 적용 전 [마이그레이션 실행 조건](#마이그레이션-실행-조�
 ```mermaid
 erDiagram
     users ||..o{ oauth_identities : has
+    users ||..o| user_acquisitions : "joined from"
 
     users {
         uuid id PK
@@ -37,6 +38,21 @@ erDiagram
         varchar(255) provider_id PK
         uuid user_id FK
         varchar(320) email "nullable"
+    }
+
+    user_acquisitions {
+        uuid user_id PK, FK
+        varchar(100) utm_source "nullable"
+        varchar(100) utm_medium "nullable"
+        varchar(100) utm_campaign "nullable"
+        varchar(200) utm_term "nullable"
+        varchar(100) utm_content "nullable"
+        varchar(255) click_id "nullable"
+        varchar(10) click_id_type "nullable"
+        varchar(255) referrer_host "nullable"
+        varchar(255) landing_path "nullable"
+        timestamptz landed_at "nullable"
+        timestamptz recorded_at
     }
 ```
 
@@ -69,6 +85,23 @@ ERD의 `0..N`은 DB에서 허용하는 관계이며, 계정 연결 기능 제공
 `provider`는 서버에 등록된 로그인 제공자를 구분하며, 이메일을 제공하지 않는 소셜 로그인도
 추가할 수 있도록 `email`은 NULL을 허용한다.
 
+### `user_acquisitions` — 가입 유입 경로
+
+| 컬럼 | 타입 | 제약·용도 |
+|---|---|---|
+| `user_id` | `uuid` | PK, FK → `users.id` `ON DELETE CASCADE`. 계정당 한 행 |
+| `utm_source`·`utm_medium`·`utm_campaign`·`utm_content` | `varchar(100)` | NULL 허용. 처음 도착한 주소의 UTM 값 |
+| `utm_term` | `varchar(200)` | NULL 허용. 검색 광고는 키워드가 들어온다 |
+| `click_id` | `varchar(255)` | NULL 허용. Google Ads 클릭 ID |
+| `click_id_type` | `varchar(10)` | NULL 허용, CHECK `gclid`·`gbraid`·`wbraid`. `click_id`와 함께 NULL이거나 함께 값이 있다 |
+| `referrer_host` | `varchar(255)` | NULL 허용. 외부 referrer의 호스트만 저장하고 경로·쿼리는 버린다 |
+| `landing_path` | `varchar(255)` | NULL 허용. 처음 도착한 경로. 쿼리는 저장하지 않는다 |
+| `landed_at` | `timestamptz` | NULL 허용. 브라우저가 기록한 첫 도착 시각 |
+| `recorded_at` | `timestamptz` | NOT NULL. Auth가 행을 기록한 시각 |
+
+행이 없으면 이 기능 이전에 가입한 계정이거나 프론트가 보내지 못한 경우다. 행이 있고 출처 컬럼이 모두 NULL이면 직접 방문이다.
+"광고·검색·직접" 같은 채널 구분은 저장하지 않고 조회할 때 `click_id`, `utm_medium`, `referrer_host`로 계산한다.
+
 ## 2. 계정 저장 규칙
 
 - 로그인 시 `(provider, provider_id)`로 조회한다. 기존 정보가 있으면 연결된 `user_id`를 사용한다.
@@ -97,8 +130,11 @@ ERD의 `0..N`은 DB에서 허용하는 관계이며, 계정 연결 기능 제공
   Auth는 브라우저 언어를 추측하지 않는다. 입력 오류는 [계정 언어 API](../API.md#계정-언어)를 따른다.
 - 온보딩 완료는 `onboarding_completed_at`이 NULL일 때만 현재 시각을 기록한다.
   이미 기록된 시각은 덮어쓰지 않으며 `updated_at`도 바꾸지 않는다. 다시 보기는 값을 초기화하지 않는다.
+- 유입 경로는 `onboarding_completed_at`이 NULL인 계정에만, 처음 한 번 기록한다. 이미 행이 있으면 덮어쓰지 않는다.
+  사용자 정보 변경이 아니므로 `updated_at`을 바꾸지 않는다. 입력 형식은 [유입 경로 기록 API](../API.md#유입-경로-기록)를 따른다.
 - 회원 탈퇴는 로그인 세션 폐기를 확인한 뒤 한 트랜잭션에서 `user_terms_acceptances`,
-  `oauth_identities`, `users` 순으로 해당 사용자의 행을 삭제한다. 공용 `terms_versions`는 유지한다.
+  `oauth_identities`, `users` 순으로 해당 사용자의 행을 삭제한다. `user_acquisitions`는 외래 키의 CASCADE로 함께 지워진다.
+  공용 `terms_versions`는 유지한다.
   유예기간·소프트 삭제·별도 백업은 두지 않는다. 같은 외부 계정으로 다시 로그인하면 새 UUID로 가입한다.
   계정을 삭제했으면 같은 트랜잭션에서 `outbox_events`에 `UserDeleted` 이벤트 한 행을 기록한다.
   payload는 `user_id`뿐이고, 계정이 이미 없어 삭제한 행이 없으면 기록하지 않는다.
@@ -161,6 +197,7 @@ V5 이후 가입한 계정만 NULL로 시작한다. V6은 `users.locale`을 NULL
 V7·V8은 약관 번역 테이블과 `v0` 영문 번역을 추가한다. 내용은 [약관 동의 설계](TERMS_CONSENT_DESIGN.md#약관-번역)를 따른다.
 V9는 다른 서비스로 발행할 이벤트를 담는 `outbox_events`를 추가한다. 기존 데이터를 바꾸지 않고 빈 테이블로 시작하며,
 이미 있던 계정에 대한 이벤트를 만들지 않는다. 컬럼의 뜻은 [V9 SQL](../../src/main/resources/db/migration/V9__create_outbox_events.sql)의 주석을 따른다.
+V10은 `user_acquisitions`를 빈 테이블로 추가한다. 기존 계정의 유입 경로는 알 수 없으므로 채우지 않는다.
 
 현재 스키마는 [V2 SQL](../../src/main/resources/db/migration/V2__align_auth_accounts.sql)과
 [V5 SQL](../../src/main/resources/db/migration/V5__add_user_onboarding_completion.sql)·

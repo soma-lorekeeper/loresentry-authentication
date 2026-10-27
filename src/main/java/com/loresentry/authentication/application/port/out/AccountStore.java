@@ -1,5 +1,6 @@
 package com.loresentry.authentication.application.port.out;
 
+import com.loresentry.authentication.domain.Acquisition;
 import com.loresentry.authentication.domain.OAuthIdentity;
 import com.loresentry.authentication.domain.SupportedLocale;
 import com.loresentry.authentication.domain.User;
@@ -87,6 +88,8 @@ public interface AccountStore {
      * @throws PortFailure 변경에 실패한 경우
      */
     boolean completeOnboarding(UUID userId, Instant completedAt);
+
+    boolean recordAcquisition(UUID userId, Acquisition acquisition, Instant recordedAt);
 
     /**
      * 사용자의 약관 동의 기록, 외부 신원 연결과 사용자를 하나의 트랜잭션으로 삭제한다.
