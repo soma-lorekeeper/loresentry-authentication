@@ -4,6 +4,7 @@ import static com.loresentry.authentication.application.port.in.AuthFailure.Reas
 
 import com.loresentry.authentication.application.port.in.*;
 import com.loresentry.authentication.application.port.out.*;
+import com.loresentry.authentication.domain.Acquisition;
 import com.loresentry.authentication.domain.DisplayNames;
 import com.loresentry.authentication.domain.SupportedLocale;
 import java.time.Clock;
@@ -64,6 +65,18 @@ public final class AccountService implements AccountUseCase {
         final boolean found;
         try {
             found = accounts.completeOnboarding(userId, now());
+        } catch (PortFailure failure) {
+            throw new AuthFailure(ACCOUNT_UNAVAILABLE);
+        }
+        if (!found) throw new AuthFailure(USER_NOT_FOUND);
+    }
+
+    public void recordAcquisition(UUID userId, Acquisition acquisition) {
+        if (userId == null) throw new AuthFailure(USER_CONTEXT_REQUIRED);
+        if (acquisition == null) throw new AuthFailure(INVALID_REQUEST);
+        final boolean found;
+        try {
+            found = accounts.recordAcquisition(userId, acquisition, now());
         } catch (PortFailure failure) {
             throw new AuthFailure(ACCOUNT_UNAVAILABLE);
         }

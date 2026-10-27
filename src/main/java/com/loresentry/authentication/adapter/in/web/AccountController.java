@@ -48,6 +48,13 @@ public class AccountController {
         return noContent();
     }
 
+    @PutMapping("/acquisition")
+    public ResponseEntity<Void> recordAcquisition(
+            HttpServletRequest request, @Valid @RequestBody AuthRequests.RecordAcquisition body) {
+        accounts.recordAcquisition(userId(request), body.toAcquisition());
+        return noContent();
+    }
+
     @DeleteMapping
     public ResponseEntity<Void> delete(HttpServletRequest request) {
         accounts.delete(userId(request));

@@ -8,6 +8,7 @@ import com.loresentry.authentication.adapter.in.web.AccountController;
 import com.loresentry.authentication.adapter.in.web.mapper.AuthResponseMapperImpl;
 import com.loresentry.authentication.application.port.in.*;
 import com.loresentry.authentication.config.JacksonConfiguration;
+import com.loresentry.authentication.domain.Acquisition;
 import com.loresentry.authentication.domain.SupportedLocale;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
@@ -272,5 +273,112 @@ class AccountControllerTest {
                 .andExpect(jsonPath("$.code").value("ACCOUNT_UNAVAILABLE"))
                 .andExpect(jsonPath("$.next_action").value("RETRY_LATER"))
                 .andExpect(header().string("Cache-Control", "no-store"));
+    }
+
+    @Test
+    void acquisitionPassesTheNormalizedSourceAndAnswersWithoutBody() throws Exception {
+        mvc.perform(
+                        put("/auth/users/me/acquisition")
+                                .header("X-User-Id", id.toString())
+                                .contentType("application/json")
+                                .content(
+                                        """
+                                        {"utm_source":"google","utm_medium":"cpc","utm_campaign":"123",
+                                         "utm_term":" 소설 에디터 ","utm_content":"","click_id":"Cj0K-a_1",
+                                         "click_id_type":"gclid","referrer_host":"www.google.com",
+                                         "landing_path":"/en/","landed_at":"2026-10-27T01:02:03.456Z"}
+                                        """))
+                .andExpect(status().isNoContent())
+                .andExpect(content().string(""))
+                .andExpect(header().string("Cache-Control", "no-store"));
+        verify(accounts)
+                .recordAcquisition(
+                        id,
+                        new Acquisition(
+                                "google",
+                                "cpc",
+                                "123",
+                                "소설 에디터",
+                                null,
+                                "Cj0K-a_1",
+                                "gclid",
+                                "www.google.com",
+                                "/en/",
+                                java.time.Instant.parse("2026-10-27T01:02:03.456Z")));
+        mvc.perform(
+                        put("/auth/users/me/acquisition")
+                                .header("X-User-Id", id.toString())
+                                .contentType("application/json")
+                                .content("{}"))
+                .andExpect(status().isNoContent());
+        verify(accounts)
+                .recordAcquisition(
+                        id,
+                        new Acquisition(
+                                null, null, null, null, null, null, null, null, null, null));
+    }
+
+    @Test
+    void malformedAcquisitionBodiesAreInvalidRequests() throws Exception {
+        for (var body :
+                java.util.List.of(
+                        "",
+                        "null",
+                        "[]",
+                        "{\"utm_source\":1}",
+                        "{\"utm_source\":\"" + "a".repeat(101) + "\"}",
+                        "{\"utm_term\":\"" + "a".repeat(201) + "\"}",
+                        "{\"utm_source\":\"goo\\ngle\"}",
+                        "{\"click_id\":\"abc\"}",
+                        "{\"click_id_type\":\"gclid\"}",
+                        "{\"click_id\":\"a b\",\"click_id_type\":\"gclid\"}",
+                        "{\"click_id\":\"abc\",\"click_id_type\":\"fbclid\"}",
+                        "{\"click_id\":\"\",\"click_id_type\":\"gclid\"}",
+                        "{\"referrer_host\":\"WWW.GOOGLE.COM\"}",
+                        "{\"referrer_host\":\"https://www.google.com/\"}",
+                        "{\"referrer_host\":\"\"}",
+                        "{\"landing_path\":\"en/\"}",
+                        "{\"landing_path\":\"/?gclid=abc\"}",
+                        "{\"landing_path\":\"/#top\"}",
+                        "{\"landed_at\":\"yesterday\"}",
+                        "{\"gclid\":\"abc\"}"))
+            mvc.perform(
+                            put("/auth/users/me/acquisition")
+                                    .header("X-User-Id", id.toString())
+                                    .contentType("application/json")
+                                    .content(body))
+                    .andExpect(status().isBadRequest())
+                    .andExpect(header().string("Cache-Control", "no-store"))
+                    .andExpect(jsonPath("$.code").value("INVALID_REQUEST"))
+                    .andExpect(jsonPath("$.next_action").value("NONE"));
+        verifyNoInteractions(accounts);
+    }
+
+    @Test
+    void acquisitionKeepsTheUserHeaderAndCoreFailureContracts() throws Exception {
+        mvc.perform(put("/auth/users/me/acquisition").contentType("application/json").content("{}"))
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.code").value("USER_CONTEXT_REQUIRED"));
+        doThrow(
+                        new AuthFailure(AuthFailure.Reason.USER_NOT_FOUND),
+                        new AuthFailure(AuthFailure.Reason.ACCOUNT_UNAVAILABLE))
+                .when(accounts)
+                .recordAcquisition(eq(id), any());
+        mvc.perform(
+                        put("/auth/users/me/acquisition")
+                                .header("X-User-Id", id.toString())
+                                .contentType("application/json")
+                                .content("{}"))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.code").value("USER_NOT_FOUND"))
+                .andExpect(jsonPath("$.next_action").value("RELOGIN"));
+        mvc.perform(
+                        put("/auth/users/me/acquisition")
+                                .header("X-User-Id", id.toString())
+                                .contentType("application/json")
+                                .content("{}"))
+                .andExpect(status().isServiceUnavailable())
+                .andExpect(jsonPath("$.code").value("ACCOUNT_UNAVAILABLE"))
+                .andExpect(jsonPath("$.next_action").value("RETRY_LATER"));
     }
 }

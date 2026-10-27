@@ -5,11 +5,14 @@ import com.loresentry.authentication.adapter.out.outbox.OutboxRepository;
 import com.loresentry.authentication.application.port.out.AccountStore.Account;
 import com.loresentry.authentication.domain.*;
 import jakarta.persistence.EntityManager;
+import java.sql.Timestamp;
+import java.sql.Types;
 import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 import lombok.RequiredArgsConstructor;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Isolation;
 import org.springframework.transaction.annotation.Transactional;
@@ -23,7 +26,22 @@ import org.springframework.transaction.annotation.Transactional;
 @Component
 @RequiredArgsConstructor
 public class AccountTransactions {
+    private static final int[] ACQUISITION_TYPES = {
+        Types.OTHER,
+        Types.VARCHAR,
+        Types.VARCHAR,
+        Types.VARCHAR,
+        Types.VARCHAR,
+        Types.VARCHAR,
+        Types.VARCHAR,
+        Types.VARCHAR,
+        Types.VARCHAR,
+        Types.VARCHAR,
+        Types.TIMESTAMP,
+        Types.TIMESTAMP
+    };
     private final EntityManager entityManager;
+    private final JdbcTemplate jdbc;
     private final IdentityRepository identities;
     private final AccountEntityMapper mapper;
 
@@ -87,6 +105,35 @@ public class AccountTransactions {
                         .setParameter(2, userId)
                         .executeUpdate()
                 > 0;
+    }
+
+    @Transactional(rollbackFor = Exception.class, isolation = Isolation.READ_COMMITTED)
+    public boolean recordAcquisition(UUID userId, Acquisition acquisition, Instant time) {
+        var open =
+                jdbc.queryForList(
+                        "SELECT onboarding_completed_at IS NULL FROM users WHERE id = ? FOR SHARE",
+                        Boolean.class,
+                        userId);
+        if (open.isEmpty()) return false;
+        if (!open.getFirst()) return true;
+        jdbc.update(
+                "INSERT INTO user_acquisitions(user_id, utm_source, utm_medium, utm_campaign, utm_term, utm_content, click_id, click_id_type, referrer_host, landing_path, landed_at, recorded_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT (user_id) DO NOTHING",
+                new Object[] {
+                    userId,
+                    acquisition.utmSource(),
+                    acquisition.utmMedium(),
+                    acquisition.utmCampaign(),
+                    acquisition.utmTerm(),
+                    acquisition.utmContent(),
+                    acquisition.clickId(),
+                    acquisition.clickIdType(),
+                    acquisition.referrerHost(),
+                    acquisition.landingPath(),
+                    acquisition.landedAt() == null ? null : Timestamp.from(acquisition.landedAt()),
+                    Timestamp.from(time)
+                },
+                ACQUISITION_TYPES);
+        return true;
     }
 
     @Transactional(rollbackFor = Exception.class, isolation = Isolation.READ_COMMITTED)

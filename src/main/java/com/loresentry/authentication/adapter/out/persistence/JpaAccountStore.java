@@ -49,6 +49,10 @@ public class JpaAccountStore implements AccountStore {
         return invoke(() -> transactions.completeOnboarding(id, time));
     }
 
+    public boolean recordAcquisition(UUID id, Acquisition acquisition, Instant time) {
+        return invoke(() -> transactions.recordAcquisition(id, acquisition, time));
+    }
+
     public boolean delete(UUID id) {
         return invoke(() -> transactions.delete(id));
     }

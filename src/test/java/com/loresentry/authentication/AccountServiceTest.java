@@ -196,6 +196,48 @@ class AccountServiceTest {
     }
 
     @Test
+    void acquisitionUsesInjectedTimeAndSeparatesMissingAccountFromStorageFailure() {
+        var service = new AccountService(store, sessions, clock);
+        var acquisition =
+                new Acquisition(
+                        "google",
+                        "cpc",
+                        "123",
+                        "소설 에디터",
+                        null,
+                        "abc",
+                        "gclid",
+                        "www.google.com",
+                        "/",
+                        Instant.parse("2026-09-16T23:00:00Z"));
+        when(store.recordAcquisition(id, acquisition, clock.instant())).thenReturn(true, false);
+        service.recordAcquisition(id, acquisition);
+        verify(store).recordAcquisition(id, acquisition, clock.instant());
+        assertReason(
+                () -> service.recordAcquisition(id, acquisition),
+                AuthFailure.Reason.USER_NOT_FOUND);
+        when(store.recordAcquisition(id, acquisition, clock.instant())).thenThrow(unavailable());
+        assertReason(
+                () -> service.recordAcquisition(id, acquisition),
+                AuthFailure.Reason.ACCOUNT_UNAVAILABLE);
+        assertReason(
+                () -> service.recordAcquisition(null, acquisition),
+                AuthFailure.Reason.USER_CONTEXT_REQUIRED);
+        assertReason(() -> service.recordAcquisition(id, null), AuthFailure.Reason.INVALID_REQUEST);
+    }
+
+    @Test
+    void acquisitionTreatsBlankCampaignValuesAsAbsent() {
+        var acquisition =
+                new Acquisition(" google ", "  ", "", null, "\t", null, null, null, null, null);
+        assertThat(acquisition.utmSource()).isEqualTo("google");
+        assertThat(acquisition.utmMedium()).isNull();
+        assertThat(acquisition.utmCampaign()).isNull();
+        assertThat(acquisition.utmTerm()).isNull();
+        assertThat(acquisition.utmContent()).isNull();
+    }
+
+    @Test
     void profileReportsOnboardingCompletionFromTheStoredTime() {
         var service = new AccountService(store, sessions, clock);
         var identity = new OAuthIdentity("google", "subject", id, null);
