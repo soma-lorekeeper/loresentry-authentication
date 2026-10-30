@@ -17,7 +17,8 @@ public class GoogleConfiguration {
                 properties.clientId(),
                 properties.clientSecret(),
                 properties.redirectUri(),
-                environment.acceptsProfiles(Profiles.of("local")));
+                environment.acceptsProfiles(Profiles.of("local")),
+                environment.acceptsProfiles(Profiles.of("dev")));
     }
 
     @Bean(destroyMethod = "close")
