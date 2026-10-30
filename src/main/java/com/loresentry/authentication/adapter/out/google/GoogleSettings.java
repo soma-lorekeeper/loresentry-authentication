@@ -5,6 +5,11 @@ import java.net.URI;
 public record GoogleSettings(String clientId, String clientSecret, String redirectUri) {
     public static GoogleSettings validated(
             String id, String secret, String redirect, boolean local) {
+        return validated(id, secret, redirect, local, false);
+    }
+
+    public static GoogleSettings validated(
+            String id, String secret, String redirect, boolean local, boolean dev) {
         try {
             if (id == null || id.isBlank() || secret == null || secret.isBlank())
                 throw new IllegalArgumentException();
@@ -15,6 +20,10 @@ public record GoogleSettings(String clientId, String clientSecret, String redire
                             || "[::1]".equals(uri.getHost());
             boolean production =
                     "https://api.loresentry.com/auth/oauth/google/callback".equals(redirect);
+            boolean devCluster =
+                    dev
+                            && "https://api-dev.loresentry.com/auth/oauth/google/callback"
+                                    .equals(redirect);
             boolean development =
                     local
                             && loopback
@@ -23,7 +32,7 @@ public record GoogleSettings(String clientId, String clientSecret, String redire
                             && uri.getFragment() == null
                             && uri.getQuery() == null
                             && uri.getPath().startsWith("/");
-            if (!production && !development) throw new IllegalArgumentException();
+            if (!production && !devCluster && !development) throw new IllegalArgumentException();
             return new GoogleSettings(id, secret, redirect);
         } catch (RuntimeException e) {
             throw new IllegalStateException("Invalid Google OAuth configuration");

@@ -168,6 +168,34 @@ class GoogleOidcClientTest {
                                 GoogleSettings.validated(
                                         "id", "secret", "http://evil.example/callback", true))
                 .isInstanceOf(IllegalStateException.class);
+        var devCallback = "https://api-dev.loresentry.com/auth/oauth/google/callback";
+        assertThat(GoogleSettings.validated("id", "secret", devCallback, false, true)).isNotNull();
+        assertThatThrownBy(() -> GoogleSettings.validated("id", "secret", devCallback, false))
+                .hasMessage("Invalid Google OAuth configuration");
+        assertThatThrownBy(
+                        () ->
+                                GoogleSettings.validated(
+                                        "id",
+                                        "secret",
+                                        "https://evil.example/callback",
+                                        false,
+                                        true))
+                .hasMessage("Invalid Google OAuth configuration");
+        new ApplicationContextRunner()
+                .withUserConfiguration(GoogleConfiguration.class, CoreConfiguration.class)
+                .withInitializer(context -> context.getEnvironment().setActiveProfiles("dev"))
+                .withPropertyValues(
+                        "auth.google.client-id=id",
+                        "auth.google.client-secret=test-only",
+                        "auth.google.redirect-uri=" + devCallback)
+                .run(context -> assertThat(context).hasNotFailed());
+        new ApplicationContextRunner()
+                .withUserConfiguration(GoogleConfiguration.class, CoreConfiguration.class)
+                .withPropertyValues(
+                        "auth.google.client-id=id",
+                        "auth.google.client-secret=test-only",
+                        "auth.google.redirect-uri=" + devCallback)
+                .run(context -> assertThat(context).hasFailed());
         new ApplicationContextRunner()
                 .withUserConfiguration(GoogleConfiguration.class, CoreConfiguration.class)
                 .run(context -> assertThat(context).hasFailed());
