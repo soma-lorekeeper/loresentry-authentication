@@ -69,6 +69,42 @@ class ConsentLoginFlowTest extends HttpAuthTestSupport {
     }
 
     @Test
+    void registrationClaimWorksBeforeConsentAndOnlyOnceAcrossLogins() {
+        insert(Instant.now().minusSeconds(60));
+        var first = login(subject);
+        var credential = first.body().get("consent_request_id").asString();
+        var headers = Map.of("X-Consent-Request-Id", credential);
+        var claim = call("POST", "/auth/analytics/registration/consent", Map.of(), null, headers);
+        assertThat(claim.status()).isEqualTo(200);
+        assertThat(claim.body().get("registered").asBoolean()).isTrue();
+        assertThat(
+                        call(
+                                        "POST",
+                                        "/auth/analytics/registration/consent",
+                                        Map.of(),
+                                        null,
+                                        headers)
+                                .body()
+                                .get("registered")
+                                .asBoolean())
+                .isFalse();
+        var next = login(subject);
+        var nextHeaders =
+                Map.of("X-Consent-Request-Id", next.body().get("consent_request_id").asString());
+        assertThat(
+                        call(
+                                        "POST",
+                                        "/auth/analytics/registration/consent",
+                                        Map.of(),
+                                        null,
+                                        nextHeaders)
+                                .body()
+                                .get("registered")
+                                .asBoolean())
+                .isFalse();
+    }
+
+    @Test
     void enabledGateWithoutOriginalFailsAfterAccountCommit() {
         var result = callback(pending(subject));
         error(result, 503, "LOGIN_UNAVAILABLE", "RESTART_LOGIN");

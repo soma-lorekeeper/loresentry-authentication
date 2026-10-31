@@ -26,7 +26,7 @@ class MigrationTest {
         var flyway = migrations("fresh_install");
         var result = flyway.migrate();
         assertThat(result.success).isTrue();
-        assertThat(result.migrationsExecuted).isEqualTo(10);
+        assertThat(result.migrationsExecuted).isEqualTo(11);
         assertCurrentSchema(flyway, "fresh_install");
         assertThat(flyway.migrate().migrationsExecuted).isZero();
     }
@@ -49,7 +49,7 @@ class MigrationTest {
         var checksum = v1.info().current().getChecksum();
 
         var flyway = migrations(schema);
-        assertThat(flyway.migrate().migrationsExecuted).isEqualTo(9);
+        assertThat(flyway.migrate().migrationsExecuted).isEqualTo(10);
         assertThat(flyway.info().applied())
                 .filteredOn(
                         migration ->
@@ -105,7 +105,7 @@ class MigrationTest {
                 }
             }
             var flyway = migrations(schema);
-            assertThat(flyway.migrate().migrationsExecuted).isEqualTo(7);
+            assertThat(flyway.migrate().migrationsExecuted).isEqualTo(8);
             assertPublishedV0(connection);
             try (var rows = statement.executeQuery("SELECT count(*) FROM user_terms_acceptances")) {
                 rows.next();
@@ -152,7 +152,7 @@ class MigrationTest {
                     "INSERT INTO users VALUES ('00000000-0000-4000-8000-000000000001', 'Existing author', '2026-01-02T03:04:05.123456Z', now())");
             statement.execute(
                     "INSERT INTO users VALUES ('00000000-0000-4000-8000-000000000002', 'Other author', '2026-05-06T07:08:09Z', now())");
-            assertThat(migrations(schema).migrate().migrationsExecuted).isEqualTo(6);
+            assertThat(migrations(schema).migrate().migrationsExecuted).isEqualTo(7);
             try (var rows =
                     statement.executeQuery(
                             "SELECT count(*), count(*) FILTER (WHERE onboarding_completed_at = created_at) FROM users")) {
@@ -190,7 +190,7 @@ class MigrationTest {
             connection.setSchema(schema);
             statement.execute(
                     "INSERT INTO users VALUES ('00000000-0000-4000-8000-000000000001', 'Existing author', now(), now(), now())");
-            assertThat(migrations(schema).migrate().migrationsExecuted).isEqualTo(5);
+            assertThat(migrations(schema).migrate().migrationsExecuted).isEqualTo(6);
             try (var rows = statement.executeQuery("SELECT locale FROM users")) {
                 rows.next();
                 assertThat(rows.getString(1)).isNull();
@@ -247,7 +247,7 @@ class MigrationTest {
             connection.setSchema(schema);
             statement.execute(
                     "INSERT INTO users(id, display_name, created_at, updated_at) VALUES ('00000000-0000-4000-8000-000000000001', 'Existing author', now(), now())");
-            assertThat(migrations(schema).migrate().migrationsExecuted).isEqualTo(2);
+            assertThat(migrations(schema).migrate().migrationsExecuted).isEqualTo(3);
             // 기존 계정은 그대로이고 outbox 는 빈 채로 시작한다. 이미 있던 계정의 이벤트를 지어내지 않는다.
             try (var rows =
                     statement.executeQuery(
@@ -312,7 +312,7 @@ class MigrationTest {
             connection.setSchema(schema);
             statement.execute(
                     "INSERT INTO users(id, display_name, created_at, updated_at) VALUES ('00000000-0000-4000-8000-000000000001', 'Existing author', now(), now())");
-            assertThat(migrations(schema).migrate().migrationsExecuted).isEqualTo(1);
+            assertThat(migrations(schema).migrate().migrationsExecuted).isEqualTo(2);
             try (var rows = statement.executeQuery("SELECT count(*) FROM user_acquisitions")) {
                 rows.next();
                 assertThat(rows.getLong(1)).isZero();
@@ -407,7 +407,7 @@ class MigrationTest {
         assertThat(flyway.info().applied())
                 .filteredOn(migration -> migration.getVersion() != null)
                 .extracting(migration -> migration.getVersion().getVersion())
-                .containsExactly("1", "2", "3", "4", "5", "6", "7", "8", "9", "10");
+                .containsExactly("1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11");
         assertThat(tables(schema))
                 .containsExactlyInAnyOrder(
                         "flyway_schema_history",
@@ -417,7 +417,8 @@ class MigrationTest {
                         "terms_version_translations",
                         "user_terms_acceptances",
                         "outbox_events",
-                        "user_acquisitions");
+                        "user_acquisitions",
+                        "signup_analytics_pending");
         try (Connection connection =
                 DriverManager.getConnection(
                         postgres.getJdbcUrl(), postgres.getUsername(), postgres.getPassword())) {

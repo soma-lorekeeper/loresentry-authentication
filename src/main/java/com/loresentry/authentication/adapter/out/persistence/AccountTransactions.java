@@ -65,6 +65,7 @@ public class AccountTransactions {
         entityManager.persist(entity);
         entityManager.persist(link);
         entityManager.flush();
+        jdbc.update("INSERT INTO signup_analytics_pending(user_id) VALUES (?)", user.id());
         return mapper.toAccount(link);
     }
 

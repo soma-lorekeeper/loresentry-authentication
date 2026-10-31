@@ -111,6 +111,28 @@ class AcquisitionFlowTest extends HttpAuthTestSupport {
                 "RELOGIN");
     }
 
+    @Test
+    void newRegistrationIsClaimedOnceAndExistingLoginDoesNotCreateAnother() {
+        var user = newAccount();
+        var first = call("POST", "/auth/analytics/registration/user", Map.of(), user);
+        assertThat(first.status()).isEqualTo(200);
+        assertThat(first.body().get("registered").asBoolean()).isTrue();
+        assertThat(first.headers().firstValue("Cache-Control")).contains("no-store");
+        assertThat(
+                        call("POST", "/auth/analytics/registration/user", Map.of(), user)
+                                .body()
+                                .get("registered")
+                                .asBoolean())
+                .isFalse();
+        login(subject);
+        assertThat(
+                        call("POST", "/auth/analytics/registration/user", Map.of(), user)
+                                .body()
+                                .get("registered")
+                                .asBoolean())
+                .isFalse();
+    }
+
     private UUID newAccount() {
         login(subject);
         return accounts.findByIdentity("google", subject).orElseThrow().user().id();
