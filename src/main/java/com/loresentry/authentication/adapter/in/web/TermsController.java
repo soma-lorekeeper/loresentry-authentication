@@ -3,9 +3,12 @@ package com.loresentry.authentication.adapter.in.web;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import com.loresentry.authentication.application.port.in.TermsAcceptUseCase;
 import com.loresentry.authentication.application.port.in.TermsQueryUseCase;
+import com.loresentry.authentication.logging.AppLogger;
+import com.loresentry.authentication.logging.LogField;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotNull;
 import java.time.Instant;
+import java.util.Set;
 import java.util.UUID;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseEntity;
@@ -38,6 +41,8 @@ public class TermsController {
 
     @PostMapping("/accept")
     public ResponseEntity<AcceptedResponse> accept(@Valid @RequestBody AcceptRequest request) {
+        // 동의 요청 ID는 로그인을 이어 갈 수 있는 값이라 남기지 않는다. 약관 버전은 검증을 마친 뒤 서비스의 결과 줄에 남는다
+        AppLogger.current().info("terms accept requested");
         var result = accept.accept(request.consentRequestId(), request.termsVersionId());
         return ResponseEntity.ok()
                 .header("Cache-Control", "no-store")
@@ -58,6 +63,9 @@ public class TermsController {
     public ResponseEntity<TermsResponse> get(
             @RequestHeader(value = "X-Consent-Request-Id", required = false) String id,
             @RequestParam(value = "locale", required = false) String locale) {
+        // 동의 요청 ID(X-Consent-Request-Id)는 남기지 않는다. 언어는 지원 언어면 그대로, 그 밖의 값은 other로 남는다
+        AppLogger.current()
+                .info("terms get requested", LogField.code("locale", locale, Set.of("ko", "en")));
         var view = query.query(id, locale);
         var terms = view.terms();
         var text = view.text();

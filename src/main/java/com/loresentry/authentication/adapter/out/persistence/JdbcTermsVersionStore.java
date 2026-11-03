@@ -5,9 +5,12 @@ import com.loresentry.authentication.application.port.out.TermsVersionStore;
 import com.loresentry.authentication.domain.SupportedLocale;
 import com.loresentry.authentication.domain.TermsText;
 import com.loresentry.authentication.domain.TermsVersion;
+import com.loresentry.authentication.logging.AppLogger;
+import com.loresentry.authentication.logging.LogField;
 import java.sql.Timestamp;
 import java.time.Instant;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 import lombok.RequiredArgsConstructor;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -20,6 +23,7 @@ public class JdbcTermsVersionStore implements TermsVersionStore {
 
     @Override
     public Optional<TermsVersion> current(Instant now) {
+        AppLogger.current().info("terms current version get");
         try {
             return jdbc
                     .query(
@@ -37,12 +41,27 @@ public class JdbcTermsVersionStore implements TermsVersionStore {
                     .stream()
                     .findFirst();
         } catch (RuntimeException error) {
+            // 원인은 예외 클래스 이름과 스택 프레임만 남긴다(메시지에는 SQL·키·값이 섞일 수 있다). 이 실패는 PortFailure 로 바뀌어 원인이 사라진다
+            AppLogger.current()
+                    .warn(
+                            "terms version store call failed",
+                            LogField.errorType(error.getClass().getName()),
+                            LogField.safeStackTrace(error));
             throw unavailable();
         }
     }
 
     @Override
     public Optional<TermsText> translation(UUID termsVersionId, SupportedLocale locale) {
+        // 언어는 controller 진입 줄과 같은 소문자 코드(ko·en)로 남긴다
+        AppLogger.current()
+                .info(
+                        "terms translation get",
+                        LogField.param("terms_version_id", termsVersionId),
+                        LogField.code(
+                                "locale",
+                                locale == null ? null : locale.code(),
+                                Set.of("ko", "en")));
         try {
             return jdbc
                     .query(
@@ -55,6 +74,12 @@ public class JdbcTermsVersionStore implements TermsVersionStore {
                     .stream()
                     .findFirst();
         } catch (RuntimeException error) {
+            // 원인은 예외 클래스 이름과 스택 프레임만 남긴다(메시지에는 SQL·키·값이 섞일 수 있다). 이 실패는 PortFailure 로 바뀌어 원인이 사라진다
+            AppLogger.current()
+                    .warn(
+                            "terms version store call failed",
+                            LogField.errorType(error.getClass().getName()),
+                            LogField.safeStackTrace(error));
             throw unavailable();
         }
     }

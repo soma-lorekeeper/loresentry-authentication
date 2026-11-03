@@ -3,12 +3,24 @@ package com.loresentry.authentication.application.service;
 import com.loresentry.authentication.application.port.in.*;
 import com.loresentry.authentication.application.port.out.*;
 import com.loresentry.authentication.domain.ConsentId;
+import com.loresentry.authentication.logging.AppLogger;
+import com.loresentry.authentication.logging.LogField;
 import java.time.Clock;
+import java.util.Set;
 import java.util.UUID;
 import lombok.RequiredArgsConstructor;
 
 @RequiredArgsConstructor
 public final class TermsAcceptService implements TermsAcceptUseCase {
+    /** 동의 요청을 거절한 이유(consent request rejected 줄의 result.reason). 목록 밖의 값은 other로 남는다. */
+    private static final Set<String> CONSENT_REJECTIONS =
+            Set.of(
+                    "INVALID_ID",
+                    "NOT_FOUND",
+                    "ACCOUNT_MISSING",
+                    "NOT_CONSUMABLE",
+                    "REFRESH_FAILED");
+
     private final ConsentRequestStore requests;
     private final TermsVersionStore versions;
     private final TermsAcceptanceStore acceptances;
@@ -18,6 +30,8 @@ public final class TermsAcceptService implements TermsAcceptUseCase {
     private final Clock clock;
 
     public Accepted accept(String rawId, String rawVersion) {
+        // 동의 요청 ID는 로그인을 이어 갈 수 있는 값이라 남기지 않는다. 약관 버전은 검증을 마친 뒤 결과 줄에 남긴다
+        AppLogger.current().info("terms accept");
         UUID version;
         try {
             version = UUID.fromString(rawVersion);
@@ -29,28 +43,99 @@ public final class TermsAcceptService implements TermsAcceptUseCase {
         try {
             id = new ConsentId(rawId);
         } catch (IllegalArgumentException error) {
+            AppLogger.current()
+                    .warn(
+                            "consent request rejected",
+                            LogField.resultCode("reason", "INVALID_ID", CONSENT_REJECTIONS));
             throw invalid();
         }
+        // 동의 요청을 소모했는지. 실패 줄(terms accept failed)에 남긴다. 소모 호출 도중 실패하면 알 수 없어 null이다
+        Boolean consumed = false;
         try {
-            var pending = requests.find(id).orElseThrow(TermsAcceptService::invalid);
-            if (accounts.findById(pending.userId()).isEmpty()) throw invalid();
+            var pending =
+                    requests.find(id)
+                            .orElseThrow(
+                                    () -> {
+                                        AppLogger.current()
+                                                .warn(
+                                                        "consent request rejected",
+                                                        LogField.resultCode(
+                                                                "reason",
+                                                                "NOT_FOUND",
+                                                                CONSENT_REJECTIONS));
+                                        return invalid();
+                                    });
+            if (accounts.findById(pending.userId()).isEmpty()) {
+                AppLogger.current()
+                        .withUser(pending.userId())
+                        .warn(
+                                "consent request rejected",
+                                LogField.resultCode(
+                                        "reason", "ACCOUNT_MISSING", CONSENT_REJECTIONS));
+                throw invalid();
+            }
             var current =
                     versions.current(clock.instant())
                             .orElseThrow(
-                                    () -> new AuthFailure(AuthFailure.Reason.LOGIN_UNAVAILABLE));
-            if (!current.id().equals(version) || !pending.termsVersionId().equals(version))
+                                    () -> {
+                                        AppLogger.current().warn("terms current version missing");
+                                        return new AuthFailure(
+                                                AuthFailure.Reason.LOGIN_UNAVAILABLE);
+                                    });
+            if (!current.id().equals(version) || !pending.termsVersionId().equals(version)) {
+                // 409. 화면이 본 버전(요청), 지금 버전, 동의 요청에 묶인 버전을 함께 남겨 어느 쪽이 바뀌었는지 보이게 한다
+                AppLogger.current()
+                        .withUser(pending.userId())
+                        .warn(
+                                "terms accept version mismatch",
+                                LogField.param("terms_version_id", version),
+                                LogField.param("current_terms_version_id", current.id()),
+                                LogField.param(
+                                        "pending_terms_version_id", pending.termsVersionId()));
                 throw mismatch();
+            }
+            consumed = null;
             switch (requests.consume(id, pending.userId(), version)) {
-                case INVALID -> throw invalid();
-                case VERSION_MISMATCH -> throw mismatch();
-                case CONSUMED -> {}
+                case INVALID -> {
+                    AppLogger.current()
+                            .withUser(pending.userId())
+                            .warn(
+                                    "consent request rejected",
+                                    LogField.resultCode(
+                                            "reason", "NOT_CONSUMABLE", CONSENT_REJECTIONS));
+                    throw invalid();
+                }
+                case VERSION_MISMATCH -> {
+                    // 위 비교를 통과한 뒤 소모하는 사이에 동의 요청의 버전이 바뀌었다(다른 화면이 약관을 다시 읽음)
+                    AppLogger.current()
+                            .withUser(pending.userId())
+                            .warn(
+                                    "terms accept version mismatch",
+                                    LogField.param("terms_version_id", version),
+                                    LogField.param("current_terms_version_id", current.id()),
+                                    LogField.param(
+                                            "pending_terms_version_id", pending.termsVersionId()));
+                    throw mismatch();
+                }
+                case CONSUMED -> consumed = true;
             }
             acceptances.accept(pending.userId(), version, clock.instant());
             var issued = SessionIssuance.create(pending.userId(), ids, sessions, accounts);
+            // 약관 동의로 로그인을 마친 결과 줄. 동의 요청에서 처음 알게 된 사용자를 붙인다. 세션 ID는 남기지 않는다
+            AppLogger.current()
+                    .withUser(pending.userId())
+                    .info("terms accept completed", LogField.param("terms_version_id", version));
             return new Accepted(issued.id(), issued.expiresAt());
         } catch (AuthFailure failure) {
             throw failure;
         } catch (RuntimeException failure) {
+            // 503으로 바뀌어 원인이 사라지므로 여기서 남긴다. 예외 메시지는 남기지 않고 클래스 이름과 프레임만 남긴다
+            AppLogger.current()
+                    .warn(
+                            "terms accept failed",
+                            LogField.errorType(failure.getClass().getName()),
+                            LogField.safeStackTrace(failure),
+                            LogField.param("consent_consumed", consumed));
             throw new AuthFailure(AuthFailure.Reason.LOGIN_UNAVAILABLE);
         }
     }

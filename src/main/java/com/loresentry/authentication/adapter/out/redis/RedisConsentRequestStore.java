@@ -3,6 +3,8 @@ package com.loresentry.authentication.adapter.out.redis;
 import com.loresentry.authentication.application.port.out.ConsentRequestStore;
 import com.loresentry.authentication.application.port.out.PortFailure;
 import com.loresentry.authentication.domain.ConsentId;
+import com.loresentry.authentication.logging.AppLogger;
+import com.loresentry.authentication.logging.LogField;
 import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
@@ -36,15 +38,23 @@ public final class RedisConsentRequestStore implements ConsentRequestStore {
         this.redis = redis;
     }
 
+    // 동의 요청 ID와 그 hash(Redis 키)는 로그인을 이어 갈 수 있는 값이라 이 클래스의 어느 줄에도 남기지 않는다
     public Optional<Pending> create(ConsentId id, UUID userId, UUID version) {
+        AppLogger.current()
+                .info("consent request create", LogField.param("terms_version_id", version));
         return execute(id, "create", userId.toString(), version.toString());
     }
 
     public Optional<Pending> find(ConsentId id) {
+        AppLogger.current().info("consent request find");
         return execute(id, "find", "", "");
     }
 
     public Optional<Pending> refreshVersion(ConsentId id, UUID userId, UUID version) {
+        AppLogger.current()
+                .info(
+                        "consent request version refresh",
+                        LogField.param("terms_version_id", version));
         return execute(id, "refresh", userId.toString(), version.toString());
     }
 
@@ -84,6 +94,12 @@ public final class RedisConsentRequestStore implements ConsentRequestStore {
                             Instant.ofEpochMilli(created),
                             Instant.ofEpochMilli(expires)));
         } catch (RuntimeException error) {
+            // 원인은 예외 클래스 이름과 스택 프레임만 남긴다(메시지에는 SQL·키·값이 섞일 수 있다). 이 실패는 PortFailure 로 바뀌어 원인이 사라진다
+            AppLogger.current()
+                    .warn(
+                            "consent request store call failed",
+                            LogField.errorType(error.getClass().getName()),
+                            LogField.safeStackTrace(error));
             throw new PortFailure(
                     PortFailure.Kind.UNAVAILABLE, PortFailure.Execution.UNKNOWN, false);
         }
@@ -91,6 +107,10 @@ public final class RedisConsentRequestStore implements ConsentRequestStore {
 
     @Override
     public Consumption consume(ConsentId id, UUID userId, UUID termsVersionId) {
+        AppLogger.current()
+                .info(
+                        "consent request consume",
+                        LogField.param("terms_version_id", termsVersionId));
         try {
             var result =
                     redis.execute(
@@ -104,6 +124,12 @@ public final class RedisConsentRequestStore implements ConsentRequestStore {
             if ("consumed".equals(result)) return Consumption.CONSUMED;
             throw new IllegalArgumentException();
         } catch (RuntimeException error) {
+            // 원인은 예외 클래스 이름과 스택 프레임만 남긴다(메시지에는 SQL·키·값이 섞일 수 있다). 이 실패는 PortFailure 로 바뀌어 원인이 사라진다
+            AppLogger.current()
+                    .warn(
+                            "consent request store call failed",
+                            LogField.errorType(error.getClass().getName()),
+                            LogField.safeStackTrace(error));
             throw new PortFailure(
                     PortFailure.Kind.UNAVAILABLE, PortFailure.Execution.UNKNOWN, false);
         }

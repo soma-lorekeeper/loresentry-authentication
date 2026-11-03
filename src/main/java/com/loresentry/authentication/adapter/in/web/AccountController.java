@@ -4,6 +4,8 @@ import com.loresentry.authentication.adapter.in.web.dto.AuthRequests;
 import com.loresentry.authentication.adapter.in.web.dto.AuthResponses;
 import com.loresentry.authentication.adapter.in.web.mapper.AuthResponseMapper;
 import com.loresentry.authentication.application.port.in.*;
+import com.loresentry.authentication.logging.AppLogger;
+import com.loresentry.authentication.logging.LogField;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import java.util.*;
@@ -25,12 +27,15 @@ public class AccountController {
 
     @GetMapping
     public ResponseEntity<AuthResponses.Profile> get(HttpServletRequest request) {
+        AppLogger.current().info("account get requested");
         return profile(accounts.get(userId(request)));
     }
 
     @PatchMapping
     public ResponseEntity<AuthResponses.Profile> rename(
             HttpServletRequest request, @Valid @RequestBody AuthRequests.Rename body) {
+        // 표시 이름은 개인정보라 가려서도 남기지 않는다
+        AppLogger.current().info("account rename requested");
         UUID id = userId(request);
         return profile(accounts.rename(id, body.displayName()));
     }
@@ -38,12 +43,18 @@ public class AccountController {
     @PutMapping("/locale")
     public ResponseEntity<AuthResponses.Profile> changeLocale(
             HttpServletRequest request, @Valid @RequestBody AuthRequests.ChangeLocale body) {
+        // 지원 언어(ko·en)면 그대로, 그 밖의 값은 other로 남는다
+        AppLogger.current()
+                .info(
+                        "account locale change requested",
+                        LogField.code("locale", body.locale(), Set.of("ko", "en")));
         UUID id = userId(request);
         return profile(accounts.changeLocale(id, body.locale()));
     }
 
     @PutMapping("/onboarding")
     public ResponseEntity<Void> completeOnboarding(HttpServletRequest request) {
+        AppLogger.current().info("account onboarding complete requested");
         accounts.completeOnboarding(userId(request));
         return noContent();
     }
@@ -51,12 +62,21 @@ public class AccountController {
     @PutMapping("/acquisition")
     public ResponseEntity<Void> recordAcquisition(
             HttpServletRequest request, @Valid @RequestBody AuthRequests.RecordAcquisition body) {
+        // 광고 클릭 ID·UTM 값은 클릭 하나와 캠페인을 특정하므로 남기지 않는다. 클릭 ID의 종류(정해진 세 값)만 남긴다
+        AppLogger.current()
+                .info(
+                        "account acquisition record requested",
+                        LogField.code(
+                                "click_id_type",
+                                body.clickIdType(),
+                                Set.of("gclid", "gbraid", "wbraid")));
         accounts.recordAcquisition(userId(request), body.toAcquisition());
         return noContent();
     }
 
     @DeleteMapping
     public ResponseEntity<Void> delete(HttpServletRequest request) {
+        AppLogger.current().info("account delete requested");
         accounts.delete(userId(request));
         return noContent();
     }

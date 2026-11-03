@@ -18,6 +18,7 @@ public class AuthFailure extends RuntimeException {
         LOGIN_UNAVAILABLE,
         REVOCATION_UNCONFIRMED,
         ACCOUNT_UNAVAILABLE,
+        NOT_FOUND,
         INTERNAL_ERROR
     }
 

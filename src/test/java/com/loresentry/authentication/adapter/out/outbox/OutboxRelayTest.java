@@ -3,6 +3,7 @@ package com.loresentry.authentication.adapter.out.outbox;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import com.loresentry.authentication.adapter.out.outbox.Round.Outcome;
+import com.loresentry.authentication.support.Slf4jLogSinkExtension;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.InstantSource;
@@ -36,6 +37,7 @@ import org.springframework.scheduling.annotation.EnableScheduling;
  * 기다리지 않는다.
  */
 @ExtendWith(OutputCaptureExtension.class)
+@ExtendWith(Slf4jLogSinkExtension.class)
 class OutboxRelayTest {
 
     /** 할 일이 없었던 회차. */

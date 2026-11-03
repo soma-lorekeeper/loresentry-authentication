@@ -6,6 +6,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 import com.loresentry.authentication.adapter.in.web.*;
 import com.loresentry.authentication.application.port.in.AuthFailure;
+import com.loresentry.authentication.support.Slf4jLogSinkExtension;
 import java.util.*;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -17,6 +18,7 @@ import org.springframework.web.bind.annotation.*;
 import tools.jackson.databind.json.JsonMapper;
 
 @ExtendWith(OutputCaptureExtension.class)
+@ExtendWith(Slf4jLogSinkExtension.class)
 class ErrorContractTest {
     @RestController
     static class Fixture {
@@ -57,6 +59,7 @@ class ErrorContractTest {
                         entry("LOGIN_UNAVAILABLE", "503 RESTART_LOGIN"),
                         entry("REVOCATION_UNCONFIRMED", "503 NONE"),
                         entry("ACCOUNT_UNAVAILABLE", "503 RETRY_LATER"),
+                        entry("NOT_FOUND", "404 NONE"),
                         entry("INTERNAL_ERROR", "500 NONE"));
         assertThat(expected).hasSize(AuthFailure.Reason.values().length);
         for (var reason : AuthFailure.Reason.values()) {

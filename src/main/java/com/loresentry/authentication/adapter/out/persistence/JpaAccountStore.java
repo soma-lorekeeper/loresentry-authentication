@@ -2,8 +2,11 @@ package com.loresentry.authentication.adapter.out.persistence;
 
 import com.loresentry.authentication.application.port.out.*;
 import com.loresentry.authentication.domain.*;
+import com.loresentry.authentication.logging.AppLogger;
+import com.loresentry.authentication.logging.LogField;
 import java.time.Instant;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 import java.util.function.Supplier;
 import lombok.RequiredArgsConstructor;
@@ -22,38 +25,56 @@ public class JpaAccountStore implements AccountStore {
     private final AccountTransactions transactions;
 
     public Optional<Account> findByIdentity(String provider, String subject) {
+        // Google subject는 사람을 특정하는 값이라 남기지 않는다. 공급자는 정해진 코드만 남긴다
+        AppLogger.current()
+                .info(
+                        "account find by identity",
+                        LogField.code("provider", provider, Set.of("google")));
         return invoke(() -> transactions.findByIdentity(provider, subject));
     }
 
     public Optional<Account> findById(UUID id) {
+        AppLogger.current().info("account find");
         return invoke(() -> transactions.findById(id));
     }
 
     public Account create(User user, OAuthIdentity identity) {
+        // 표시 이름·이메일·Google subject는 남기지 않는다
+        AppLogger.current().info("account create");
         return invoke(() -> transactions.create(user, identity));
     }
 
     public Account updateEmail(String provider, String subject, String email, Instant time) {
+        // 이메일·Google subject는 사람을 특정하는 값이라 남기지 않는다
+        AppLogger.current()
+                .info(
+                        "account email update",
+                        LogField.code("provider", provider, Set.of("google")));
         return invoke(() -> transactions.updateEmail(provider, subject, email, time));
     }
 
     public Optional<Account> rename(UUID id, String name, Instant time) {
+        AppLogger.current().info("account rename");
         return invoke(() -> transactions.rename(id, name, time));
     }
 
     public Optional<Account> changeLocale(UUID id, SupportedLocale locale, Instant time) {
+        AppLogger.current().info("account locale change");
         return invoke(() -> transactions.changeLocale(id, locale, time));
     }
 
     public boolean completeOnboarding(UUID id, Instant time) {
+        AppLogger.current().info("account onboarding complete");
         return invoke(() -> transactions.completeOnboarding(id, time));
     }
 
     public boolean recordAcquisition(UUID id, Acquisition acquisition, Instant time) {
+        AppLogger.current().info("account acquisition record");
         return invoke(() -> transactions.recordAcquisition(id, acquisition, time));
     }
 
     public boolean delete(UUID id) {
+        AppLogger.current().info("account delete");
         return invoke(() -> transactions.delete(id));
     }
 
@@ -71,6 +92,12 @@ public class JpaAccountStore implements AccountStore {
                             false);
                 }
             }
+            // 원인은 예외 클래스 이름과 스택 프레임만 남긴다(메시지에는 SQL·키·값이 섞일 수 있다). 이 실패는 PortFailure 로 바뀌어 원인이 사라진다
+            AppLogger.current()
+                    .warn(
+                            "account store call failed",
+                            LogField.errorType(error.getClass().getName()),
+                            LogField.safeStackTrace(error));
             throw new PortFailure(
                     PortFailure.Kind.UNAVAILABLE, PortFailure.Execution.UNKNOWN, false);
         }

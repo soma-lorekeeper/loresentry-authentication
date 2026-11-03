@@ -1,9 +1,10 @@
 package com.loresentry.authentication.adapter.in.web;
 
 import com.loresentry.authentication.application.port.in.AuthFailure;
+import com.loresentry.authentication.logging.AppLogger;
+import com.loresentry.authentication.logging.LogField;
 import jakarta.servlet.http.HttpServletRequest;
 import java.util.*;
-import org.slf4j.LoggerFactory;
 import org.springframework.http.ResponseEntity;
 
 public final class ErrorResponses {
@@ -32,6 +33,8 @@ public final class ErrorResponses {
                     new Contract(503, "Revocation could not be confirmed.", "NONE");
             case ACCOUNT_UNAVAILABLE ->
                     new Contract(503, "Account service is temporarily unavailable.", "RETRY_LATER");
+            // 없는 경로. 내부 오류(500)와 섞이지 않게 따로 답한다. content 의 NOT_FOUND 와 같다
+            case NOT_FOUND -> new Contract(404, "No such endpoint.", "NONE");
             case INTERNAL_ERROR -> new Contract(500, "An internal error occurred.", "NONE");
         };
     }
@@ -45,6 +48,9 @@ public final class ErrorResponses {
         body.put("code", reason.name());
         body.put("message", contract.message());
         body.put("next_action", contract.nextAction());
+        // 문의 받은 값을 Kibana 에서 바로 찾도록 trace ID 를 싣는다(LOG_SCHEMA.md 7절 응답). gateway 의 trace 와 같은 값이다
+        String traceId = AppLogger.current().traceId();
+        if (traceId != null) body.put("trace_id", traceId);
         if (callback(request)) {
             Boolean consumed =
                     auth == null
@@ -53,8 +59,22 @@ public final class ErrorResponses {
                             ? null
                             : auth.consumption() == AuthFailure.Consumption.CONSUMED;
             body.put("login_request_consumed", consumed);
+            // 콜백 실패가 로그인 요청을 소모했는지 결과 줄에도 남긴다. 알 수 없으면(null) 남기지 않는다
+            if (consumed != null)
+                AppLogger.current()
+                        .addToOutcome(LogField.result("login_request_consumed", consumed));
         }
-        if (reason == AuthFailure.Reason.INTERNAL_ERROR) logSafe(failure);
+        // 실패는 따로 찍지 않고 이유(우리 오류 코드)를 결과 줄(request completed)에 맡긴다. 그래서 실패 요청 하나의 결과는 한 줄이다
+        AppLogger.current().addToOutcome(LogField.errorType(reason.name()));
+        if (reason == AuthFailure.Reason.INTERNAL_ERROR) {
+            // 원인은 그 자리에서 warn 으로 남긴다. 예외 메시지·요청 값·SQL·provider 본문은 의도적으로 남기지 않는다.
+            // 원인마다 클래스 이름과 프레임만 남긴다.
+            AppLogger.current()
+                    .warn(
+                            "request failed with an internal error",
+                            LogField.errorType(failure.getClass().getName()),
+                            LogField.safeStackTrace(failure));
+        }
         return ResponseEntity.status(contract.status())
                 .header("Cache-Control", "no-store")
                 .body(body);
@@ -63,22 +83,5 @@ public final class ErrorResponses {
     public static boolean callback(HttpServletRequest request) {
         return (request.getContextPath() + "/auth/oauth/google/callback")
                 .equals(request.getRequestURI());
-    }
-
-    private static void logSafe(Throwable failure) {
-        StringBuilder diagnostic = new StringBuilder();
-        Set<Throwable> visited = Collections.newSetFromMap(new IdentityHashMap<>());
-        for (Throwable cause = failure;
-                cause != null && visited.size() < 8 && visited.add(cause);
-                cause = cause.getCause()) {
-            diagnostic.append(cause.getClass().getName()).append('\n');
-            Arrays.stream(cause.getStackTrace())
-                    .limit(30)
-                    .forEach(frame -> diagnostic.append("  at ").append(frame).append('\n'));
-        }
-        // Exception messages, request data, SQL and provider bodies are intentionally never
-        // rendered.
-        LoggerFactory.getLogger(ErrorResponses.class)
-                .error("Unhandled authentication error:\n{}", diagnostic);
     }
 }

@@ -4,12 +4,17 @@ import com.loresentry.authentication.application.port.out.OAuthStateStore;
 import com.loresentry.authentication.application.port.out.OidcClient;
 import com.loresentry.authentication.application.port.out.PortFailure;
 import com.loresentry.authentication.domain.OAuthSecrets;
+import com.loresentry.authentication.logging.AppLogger;
+import com.loresentry.authentication.logging.LogField;
+import io.micrometer.context.ContextExecutorService;
+import io.micrometer.context.ContextSnapshotFactory;
 import java.io.IOException;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.time.Clock;
 import java.time.Duration;
 import java.util.List;
+import java.util.Set;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -27,6 +32,8 @@ import org.springframework.security.oauth2.client.registration.ClientRegistratio
 import org.springframework.security.oauth2.core.AuthorizationGrantType;
 import org.springframework.security.oauth2.core.ClientAuthenticationMethod;
 import org.springframework.security.oauth2.core.DelegatingOAuth2TokenValidator;
+import org.springframework.security.oauth2.core.OAuth2AuthenticationException;
+import org.springframework.security.oauth2.core.OAuth2AuthorizationException;
 import org.springframework.security.oauth2.core.endpoint.OAuth2AuthorizationExchange;
 import org.springframework.security.oauth2.core.endpoint.OAuth2AuthorizationRequest;
 import org.springframework.security.oauth2.core.endpoint.OAuth2AuthorizationResponse;
@@ -60,10 +67,19 @@ public final class GoogleOidcClient implements OidcClient, AutoCloseable {
     private static final Duration READ_TIMEOUT = Duration.ofSeconds(3);
     private static final int EXCHANGE_TIMEOUT_SECONDS = 8;
 
+    /** 신원을 받아들이지 않은 이유(google identity rejected 줄의 result.reason). 목록 밖의 값은 other로 남는다. */
+    private static final Set<String> IDENTITY_REJECTIONS =
+            Set.of("NO_RESULT", "MISSING_SUBJECT", "STATE_MISMATCH");
+
     private final ClientRegistration registration;
     private final HttpClient httpClient;
     private final OidcAuthorizationCodeAuthenticationProvider authenticationProvider;
-    private final ExecutorService exchangeExecutor = Executors.newVirtualThreadPerTaskExecutor();
+    // 시간 제한을 걸려고 따로 도는 가상 스레드. ContextExecutorService 로 감싸 맡길 때의 AppLogger·span 을 새 스레드로 옮긴다
+    // (LoggingConfiguration 이 AppLogger 접근자를 등록한다). 그래서 그 스레드에서 찍힌 줄도 원래 요청의 trace 를 갖는다.
+    private final ExecutorService exchangeExecutor =
+            ContextExecutorService.wrap(
+                    Executors.newVirtualThreadPerTaskExecutor(),
+                    () -> ContextSnapshotFactory.builder().build().captureAll());
 
     public GoogleOidcClient(GoogleSettings settings, Clock clock) {
         this(settings, clock, GOOGLE);
@@ -93,12 +109,16 @@ public final class GoogleOidcClient implements OidcClient, AutoCloseable {
 
     @Override
     public Settings settings() {
+        // client ID·redirect URI는 설정값이라 남기지 않는다
+        AppLogger.current().info("google settings get");
         return new Settings(
                 REGISTRATION_ID, registration.getClientId(), registration.getRedirectUri());
     }
 
     @Override
     public URI authorizationUrl(OAuthStateStore.State state) {
+        // 인증 URL에는 state·nonce·code_challenge가 들어 있어 남기지 않는다
+        AppLogger.current().info("google authorization url build");
         var authorizationRequest = createAuthorizationRequest(state);
         return URI.create(authorizationRequest.getAuthorizationRequestUri());
     }
@@ -111,14 +131,29 @@ public final class GoogleOidcClient implements OidcClient, AutoCloseable {
      */
     @Override
     public Identity exchange(String code, OAuthStateStore.State state) {
+        // 인증 코드·state·nonce·code_verifier·토큰·신원(subject·이메일·이름)은 남기지 않는다
+        AppLogger.current().info("google token exchange call");
         validateExchangeState(state);
+        // 코드 교환과 신원 검증에 걸린 시간을 재는 시작점(흘러간 시간만 잰다)
+        long started = System.nanoTime();
         var exchangeTask = exchangeExecutor.submit(() -> exchangeAndVerifyIdentity(code, state));
         try {
-            return exchangeTask.get(EXCHANGE_TIMEOUT_SECONDS, TimeUnit.SECONDS);
+            var identity = exchangeTask.get(EXCHANGE_TIMEOUT_SECONDS, TimeUnit.SECONDS);
+            AppLogger.current()
+                    .info(
+                            "google token exchange call completed",
+                            LogField.duration(Duration.ofNanos(System.nanoTime() - started)));
+            return identity;
         } catch (TimeoutException failure) {
             exchangeTask.cancel(true);
+            // 느린 외부 호출. 공급자에서 코드가 이미 쓰였을 수 있어 다시 시도하지 않는다
+            AppLogger.current()
+                    .warn(
+                            "google token exchange call timed out",
+                            LogField.param("timeout_seconds", EXCHANGE_TIMEOUT_SECONDS));
             throw failure(PortFailure.Kind.UNAVAILABLE);
         } catch (InterruptedException failure) {
+            AppLogger.current().warn("google token exchange call interrupted");
             exchangeTask.cancel(true);
             Thread.currentThread().interrupt();
             throw failure(PortFailure.Kind.UNAVAILABLE);
@@ -129,6 +164,7 @@ public final class GoogleOidcClient implements OidcClient, AutoCloseable {
 
     @Override
     public void close() {
+        AppLogger.current().info("google client close");
         exchangeExecutor.shutdownNow();
         httpClient.shutdownNow();
     }
@@ -232,6 +268,11 @@ public final class GoogleOidcClient implements OidcClient, AutoCloseable {
                 || !registration.getRedirectUri().equals(state.redirectUri())
                 || !OAuthSecrets.valid(state.nonce())
                 || !OAuthSecrets.valid(state.codeVerifier())) {
+            // 저장된 로그인 요청이 이 클라이언트 설정과 맞지 않거나 nonce·code_verifier 형식이 틀렸다. Google을 부르기 전에 멈춘다
+            AppLogger.current()
+                    .warn(
+                            "google identity rejected",
+                            LogField.resultCode("reason", "STATE_MISMATCH", IDENTITY_REJECTIONS));
             throw failure(PortFailure.Kind.INVALID_IDENTITY);
         }
     }
@@ -251,11 +292,20 @@ public final class GoogleOidcClient implements OidcClient, AutoCloseable {
                 (OAuth2LoginAuthenticationToken)
                         authenticationProvider.authenticate(authenticationRequest);
         if (authenticationResult == null) {
+            AppLogger.current()
+                    .warn(
+                            "google identity rejected",
+                            LogField.resultCode("reason", "NO_RESULT", IDENTITY_REJECTIONS));
             throw failure(PortFailure.Kind.INVALID_IDENTITY);
         }
         var principal = authenticationResult.getPrincipal();
         String subject = principal.getAttribute("sub");
         if (subject == null || subject.isBlank()) {
+            // ID 토큰에 sub가 없다. subject 값 자체는 남기지 않는다
+            AppLogger.current()
+                    .warn(
+                            "google identity rejected",
+                            LogField.resultCode("reason", "MISSING_SUBJECT", IDENTITY_REJECTIONS));
             throw failure(PortFailure.Kind.INVALID_IDENTITY);
         }
         return new Identity(
@@ -269,12 +319,50 @@ public final class GoogleOidcClient implements OidcClient, AutoCloseable {
         if (cause instanceof PortFailure portFailure) {
             return portFailure;
         }
+        // 원인은 예외 클래스 이름·스택 프레임과, Google 이 돌려준 표준 OAuth 오류 코드(invalid_grant 등, 허용 목록 안일 때만)만 남긴다.
+        // 예외 메시지와 응답 본문에는 code·토큰이 섞일 수 있어 남기지 않는다
+        AppLogger.current()
+                .warn(
+                        "google token exchange call failed",
+                        LogField.errorType(cause == null ? null : cause.getClass().getName()),
+                        LogField.errorCode(oauthErrorCode(cause)),
+                        LogField.safeStackTrace(cause));
         for (var nested = cause; nested != null; nested = nested.getCause()) {
             if (nested instanceof IOException || nested instanceof RestClientException) {
                 return failure(PortFailure.Kind.UNAVAILABLE);
             }
         }
         return failure(PortFailure.Kind.INVALID_IDENTITY);
+    }
+
+    /** RFC 6749·OpenID Connect 의 표준 오류 코드. 이 목록 밖의 값은 남기지 않는다. */
+    private static final Set<String> OAUTH_ERROR_CODES =
+            Set.of(
+                    "invalid_request",
+                    "invalid_client",
+                    "invalid_grant",
+                    "unauthorized_client",
+                    "unsupported_grant_type",
+                    "invalid_scope",
+                    "invalid_token",
+                    "invalid_id_token",
+                    "invalid_nonce",
+                    "server_error",
+                    "temporarily_unavailable");
+
+    /** 원인 사슬에서 Spring Security 가 읽은 OAuth 오류 코드. 허용 목록 밖이거나 없으면 null. */
+    private static String oauthErrorCode(Throwable cause) {
+        for (var nested = cause; nested != null; nested = nested.getCause()) {
+            if (nested instanceof OAuth2AuthenticationException authentication) {
+                String code = authentication.getError().getErrorCode();
+                return OAUTH_ERROR_CODES.contains(code) ? code : null;
+            }
+            if (nested instanceof OAuth2AuthorizationException authorization) {
+                String code = authorization.getError().getErrorCode();
+                return OAUTH_ERROR_CODES.contains(code) ? code : null;
+            }
+        }
+        return null;
     }
 
     private PortFailure failure(PortFailure.Kind kind) {

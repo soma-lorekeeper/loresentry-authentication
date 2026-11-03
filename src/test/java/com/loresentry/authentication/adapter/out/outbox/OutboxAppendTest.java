@@ -4,6 +4,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.loresentry.authentication.support.DatabaseTestSupport;
+import io.micrometer.tracing.Span;
+import io.micrometer.tracing.Tracer;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -30,6 +32,8 @@ class OutboxAppendTest extends DatabaseTestSupport {
 
     /** 넣은 행을 확인할 때 쓴다. */
     @Autowired JdbcClient jdbcClient;
+
+    @Autowired Tracer tracer;
 
     /** 저장된 payload 를 글자가 아니라 내용으로 비교하려고 JSON 으로 읽는 도구. */
     private final JsonMapper json = JsonMapper.builder().build();
@@ -92,5 +96,51 @@ class OutboxAppendTest extends DatabaseTestSupport {
                 .param("id", aggregate)
                 .query(Long.class)
                 .single();
+    }
+
+    /**
+     * 요청을 처리하는 중에 쓴 행에는 그때의 traceparent 가 저장된다. relay 가 이 값을 헤더로 실어, 받는 서비스(content)가 같은 trace 를
+     * 잇는다(LOG_SCHEMA.md 7절 outbox). span 이 없을 때 쓴 행은 비어 있다.
+     */
+    @Test
+    void storesTheTraceparentOfTheCurrentSpan() {
+        UUID traced = UUID.randomUUID();
+        Span span = tracer.nextSpan().name("account delete").start();
+        try (Tracer.SpanInScope scope = tracer.withSpan(span)) {
+            transaction.executeWithoutResult(
+                    status ->
+                            outbox.append(
+                                    new OutboxRecord(
+                                            "UserDeleted",
+                                            traced,
+                                            "user-key",
+                                            new Sample("trace"))));
+        } finally {
+            span.end();
+        }
+        UUID untraced = UUID.randomUUID();
+        transaction.executeWithoutResult(
+                status ->
+                        outbox.append(
+                                new OutboxRecord(
+                                        "UserDeleted",
+                                        untraced,
+                                        "user-key",
+                                        new Sample("no trace"))));
+
+        // flags(마지막 두 글자)는 sampled 외에 random 비트가 켜질 수 있어 앞부분만 본다
+        assertThat(traceparent(traced))
+                .startsWith("00-" + span.context().traceId() + "-" + span.context().spanId() + "-")
+                .hasSize(55);
+        assertThat(traceparent(untraced)).isNull();
+    }
+
+    private String traceparent(UUID aggregate) {
+        return jdbcClient
+                .sql("select traceparent from outbox_events where aggregate_id = :id")
+                .param("id", aggregate)
+                .query(String.class)
+                .list()
+                .getFirst();
     }
 }
