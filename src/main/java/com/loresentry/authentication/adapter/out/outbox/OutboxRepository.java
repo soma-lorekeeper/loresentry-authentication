@@ -1,5 +1,9 @@
 package com.loresentry.authentication.adapter.out.outbox;
 
+import com.loresentry.authentication.adapter.out.logging.TraceContext;
+import com.loresentry.authentication.logging.AppLogger;
+import com.loresentry.authentication.logging.LogField;
+import com.loresentry.authentication.logging.SkipEntryLog;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.time.OffsetDateTime;
@@ -72,18 +76,24 @@ public class OutboxRepository {
      */
     @Transactional(propagation = Propagation.MANDATORY)
     public void append(OutboxRecord... outboxRecords) {
+        AppLogger.current()
+                .info("outbox events append", LogField.param("records", outboxRecords.length));
+        // 이 요청의 trace. 행에 저장하면 relay 가 그 값을 Kafka 헤더로 실어, 받는 서비스(content)가 trace 를 잇는다
+        // (LOG_SCHEMA.md 7절 outbox). span 이 없으면(테스트 등) null 로 남는다.
+        String traceparent = TraceContext.traceparent();
         for (OutboxRecord outboxRecord : outboxRecords) {
             // :payload::jsonb 는 글자로 넘긴 JSON 을 jsonb 컬럼에 맞게 바꾼다.
             jdbcClient
                     .sql(
                             """
-                            insert into outbox_events (event_type, aggregate_id, event_key, payload)
-                            values (:type, :aggregate, :key, :payload::jsonb)
+                            insert into outbox_events (event_type, aggregate_id, event_key, payload, traceparent)
+                            values (:type, :aggregate, :key, :payload::jsonb, :traceparent)
                             """)
                     .param("type", outboxRecord.eventType())
                     .param("aggregate", outboxRecord.aggregateId())
                     .param("key", outboxRecord.key())
                     .param("payload", json.writeValueAsString(outboxRecord.payload()))
+                    .param("traceparent", traceparent)
                     .update();
         }
     }
@@ -97,6 +107,8 @@ public class OutboxRepository {
      * @return 잠금을 얻었으면 true, 다른 트랜잭션이 이미 잡고 있으면 false
      */
     @Transactional(propagation = Propagation.MANDATORY)
+    @SkipEntryLog(
+            "Called on every round of the 1-second relay. The relay and publisher log only when rows are sent")
     boolean tryRelayLock() {
         // pg_try_advisory_xact_lock 은 PostgreSQL 함수다. 이름의 try 는 "기다리지 않는다", xact 는 "트랜잭션이
         // 끝나면 풀린다"는 뜻이다. 결과는 true/false 한 칸이다.
@@ -121,6 +133,8 @@ public class OutboxRepository {
      * @return 보낼 순서(seq 가 작은 것부터)대로 담긴 행. 보낼 것이 없으면 빈 목록
      */
     @Transactional(propagation = Propagation.MANDATORY)
+    @SkipEntryLog(
+            "Called on every round of the 1-second relay. The relay and publisher log only when rows are sent")
     List<OutboxEvent> lockPending(int maxRows) {
         // SQL 의 각 부분이 하는 일:
         //   payload::text    jsonb 를 글자로 바꿔 받는다. Kafka 에는 이 글자를 그대로 싣는다.
@@ -156,6 +170,7 @@ public class OutboxRepository {
      */
     @Transactional(propagation = Propagation.MANDATORY)
     void markPublished(List<UUID> ids) {
+        AppLogger.current().info("outbox events mark published", LogField.param("ids", ids));
         // id = any (:ids) 는 "id 가 배열 :ids 안에 있는 행"이다.
         jdbcClient
                 .sql("update outbox_events set published_at = now() where id = any (:ids)")
@@ -176,6 +191,8 @@ public class OutboxRepository {
      */
     @Transactional(propagation = Propagation.MANDATORY)
     int markFailed(UUID id, String error) {
+        // 이유(error)는 예외 메시지가 들어 있어 로그에 적지 않는다. DB 의 last_error 로 본다.
+        AppLogger.current().info("outbox event mark failed", LogField.cloudeventId(id));
         // attempts = attempts + 1 은 DB 가 한 번에 읽고 더한다. 앱이 읽어 와 더한 값을 다시 쓰는 방식과 달리
         // 사이에 다른 변경이 끼어들 틈이 없다. returning 은 더한 뒤의 값을 조회 없이 돌려받는다.
         return jdbcClient
@@ -203,6 +220,7 @@ public class OutboxRepository {
      */
     @Transactional(propagation = Propagation.MANDATORY)
     void quarantine(UUID id, String error) {
+        AppLogger.current().info("outbox event quarantine", LogField.cloudeventId(id));
         // 격리도 한 번의 시도이므로 attempts 를 함께 올린다.
         jdbcClient
                 .sql(
@@ -230,6 +248,7 @@ public class OutboxRepository {
      */
     @Transactional(rollbackFor = Exception.class, isolation = Isolation.READ_COMMITTED)
     int deletePublishedBefore(OffsetDateTime cutoff) {
+        AppLogger.current().info("outbox published events delete");
         return jdbcClient
                 .sql("delete from outbox_events where published_at < :cutoff")
                 .param("cutoff", cutoff)

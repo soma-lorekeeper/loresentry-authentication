@@ -2,6 +2,8 @@ package com.loresentry.authentication.adapter.out.redis;
 
 import com.loresentry.authentication.application.port.out.OAuthStateStore;
 import com.loresentry.authentication.application.port.out.PortFailure;
+import com.loresentry.authentication.logging.AppLogger;
+import com.loresentry.authentication.logging.LogField;
 import java.time.Duration;
 import java.util.Optional;
 import org.springframework.data.redis.core.StringRedisTemplate;
@@ -24,36 +26,74 @@ public class RedisOAuthStateStore implements OAuthStateStore {
         this.json = new OAuthStateJson(mapper);
     }
 
+    // 로그인 요청 ID(Redis 키)와 state·nonce·code_verifier는 로그인 과정의 비밀 값이라 이 클래스의 어느 줄에도 남기지 않는다
     public boolean create(String id, State state) {
-        String encoded = json.encode(state);
+        AppLogger.current().info("oauth state create");
+        String encoded;
+        try {
+            encoded = json.encode(state);
+        } catch (RuntimeException e) {
+            // 저장할 값이 검증을 통과하지 못했거나 JSON으로 바꾸지 못했다. 같은 예외를 그대로 던져 응답은 바뀌지 않는다
+            AppLogger.current()
+                    .warn("oauth state encode failed", LogField.errorType(e.getClass().getName()));
+            throw e;
+        }
         try {
             return Boolean.TRUE.equals(
                     redis.opsForValue().setIfAbsent(key(id), encoded, Duration.ofSeconds(300)));
         } catch (RuntimeException e) {
+            // 원인은 예외 클래스 이름과 스택 프레임만 남긴다(메시지에는 SQL·키·값이 섞일 수 있다). 이 실패는 PortFailure 로 바뀌어 원인이 사라진다
+            AppLogger.current()
+                    .warn(
+                            "oauth state store call failed",
+                            LogField.errorType(e.getClass().getName()),
+                            LogField.safeStackTrace(e));
             throw unavailable();
         }
     }
 
     public Optional<State> find(String id) {
+        AppLogger.current().info("oauth state find");
         String value;
         try {
             value = redis.opsForValue().get(key(id));
         } catch (RuntimeException e) {
-            throw unavailable();
-        }
-        return Optional.ofNullable(value).map(json::decode);
-    }
-
-    public Optional<State> consume(String id) {
-        String value;
-        try {
-            value = redis.opsForValue().getAndDelete(key(id));
-        } catch (RuntimeException e) {
+            // 원인은 예외 클래스 이름과 스택 프레임만 남긴다(메시지에는 SQL·키·값이 섞일 수 있다). 이 실패는 PortFailure 로 바뀌어 원인이 사라진다
+            AppLogger.current()
+                    .warn(
+                            "oauth state store call failed",
+                            LogField.errorType(e.getClass().getName()),
+                            LogField.safeStackTrace(e));
             throw unavailable();
         }
         try {
             return Optional.ofNullable(value).map(json::decode);
         } catch (PortFailure e) {
+            // 저장된 JSON을 읽지 못했다. 값은 비밀이라 남기지 않는다
+            AppLogger.current().warn("oauth state decode failed");
+            throw e;
+        }
+    }
+
+    public Optional<State> consume(String id) {
+        AppLogger.current().info("oauth state consume");
+        String value;
+        try {
+            value = redis.opsForValue().getAndDelete(key(id));
+        } catch (RuntimeException e) {
+            // 원인은 예외 클래스 이름과 스택 프레임만 남긴다(메시지에는 SQL·키·값이 섞일 수 있다). 이 실패는 PortFailure 로 바뀌어 원인이 사라진다
+            AppLogger.current()
+                    .warn(
+                            "oauth state store call failed",
+                            LogField.errorType(e.getClass().getName()),
+                            LogField.safeStackTrace(e));
+            throw unavailable();
+        }
+        try {
+            return Optional.ofNullable(value).map(json::decode);
+        } catch (PortFailure e) {
+            // 저장된 JSON을 읽지 못했다. GETDEL은 이미 실행돼 요청은 지워졌다. 값은 비밀이라 남기지 않는다
+            AppLogger.current().warn("oauth state decode failed");
             throw new PortFailure(e.kind(), PortFailure.Execution.EXECUTED, false);
         }
     }

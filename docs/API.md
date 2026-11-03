@@ -235,6 +235,7 @@ next_action은 안내이며 세션 상태 변경이나 명령 실행 여부의 �
 | 503 | `LOGIN_UNAVAILABLE` | DB·Redis·Google 장애 또는 세션 생성 결과 불명 | `RESTART_LOGIN` |
 | 503 | `REVOCATION_UNCONFIRMED` | 세션 폐기 완료 미확인 | `NONE` |
 | 503 | `ACCOUNT_UNAVAILABLE` | 계정 저장소 장애, 탈퇴 전 세션 폐기 미확인 | `RETRY_LATER` |
+| 404 | `NOT_FOUND` | 처리기가 없는 경로 | `NONE` |
 | 500 | `INTERNAL_ERROR` | 로그인 생성 단계의 손상 레코드·내부 결함 등 미분류 오류 | `NONE` |
 
 BFF의 보호 요청 검증·연장 실패는 [BFF 제공 API](../../loresentry-gateway/docs/API.md#보호-api-인증-실패)의
@@ -250,7 +251,7 @@ BFF의 보호 요청 검증·연장 실패는 [BFF 제공 API](../../loresentry-
 | 메서드·경로 | 용도 |
 |---|---|
 | `GET /health` | 프로세스 상태 확인 |
-| `GET /health/db` | DB 연결 확인 |
+| `GET /health/db` | DB 연결 확인. 200 본문은 `status`·`service`·`database`, 실패는 고정 문구의 503. DB 사용자 이름·버전·예외 메시지는 싣지 않는다 |
 | `GET /` | 서비스 이름 |
 
 진단 API도 클러스터 내부 접근 범위를 따른다.

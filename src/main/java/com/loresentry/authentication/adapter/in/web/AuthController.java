@@ -5,6 +5,7 @@ import com.loresentry.authentication.adapter.in.web.dto.AuthResponses;
 import com.loresentry.authentication.adapter.in.web.mapper.AuthRequestMapper;
 import com.loresentry.authentication.adapter.in.web.mapper.AuthResponseMapper;
 import com.loresentry.authentication.application.port.in.LoginUseCase;
+import com.loresentry.authentication.logging.AppLogger;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseEntity;
@@ -35,6 +36,7 @@ public class AuthController {
     @PostMapping("/oauth/google/prepare")
     public ResponseEntity<AuthResponses.PreparedLogin> prepare(
             @Valid @RequestBody AuthRequests.Prepare request) {
+        AppLogger.current().info("login prepare requested");
         var preparedLogin = login.prepare();
         var response = responseMapper.preparedLogin(preparedLogin);
         return ok(response);
@@ -43,6 +45,8 @@ public class AuthController {
     @PostMapping("/oauth/google/callback")
     public ResponseEntity<AuthResponses.Callback> callback(
             @Valid @RequestBody AuthRequests.Callback request) {
+        // 로그인 요청 ID·OAuth state·code·error는 로그인 과정의 비밀 값이라 남기지 않는다
+        AppLogger.current().info("login callback requested");
         var command = requestMapper.callback(request);
         var loginResult = login.callback(command);
         var response = responseMapper.callback(loginResult);

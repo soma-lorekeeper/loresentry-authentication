@@ -10,8 +10,11 @@ import org.springframework.stereotype.Component;
 import org.springframework.web.filter.OncePerRequestFilter;
 import tools.jackson.databind.json.JsonMapper;
 
+// RequestLogFilter(HIGHEST_PRECEDENCE + 2) 안쪽에서 돈다. 그래서 이 필터가 쓴 오류 응답도 접근 로그의 결과 줄(request
+// completed)에
+// 남고, 오류를 기록할 때 요청의 trace가 붙는다(LoggingConfiguration).
 @Component
-@Order(Ordered.HIGHEST_PRECEDENCE)
+@Order(Ordered.HIGHEST_PRECEDENCE + 3)
 @RequiredArgsConstructor
 public class ErrorBoundaryFilter extends OncePerRequestFilter {
     private final JsonMapper mapper;

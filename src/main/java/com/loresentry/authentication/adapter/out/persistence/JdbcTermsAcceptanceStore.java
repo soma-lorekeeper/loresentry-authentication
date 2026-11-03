@@ -2,6 +2,8 @@ package com.loresentry.authentication.adapter.out.persistence;
 
 import com.loresentry.authentication.application.port.out.PortFailure;
 import com.loresentry.authentication.application.port.out.TermsAcceptanceStore;
+import com.loresentry.authentication.logging.AppLogger;
+import com.loresentry.authentication.logging.LogField;
 import java.sql.Timestamp;
 import java.time.Instant;
 import java.util.UUID;
@@ -20,6 +22,8 @@ public class JdbcTermsAcceptanceStore implements TermsAcceptanceStore {
 
     @Override
     public boolean hasAccepted(UUID userId, UUID termsVersionId) {
+        AppLogger.current()
+                .info("terms acceptance check", LogField.param("terms_version_id", termsVersionId));
         try {
             return Boolean.TRUE.equals(
                     jdbc.queryForObject(
@@ -28,12 +32,20 @@ public class JdbcTermsAcceptanceStore implements TermsAcceptanceStore {
                             userId,
                             termsVersionId));
         } catch (RuntimeException error) {
+            // 원인은 예외 클래스 이름과 스택 프레임만 남긴다(메시지에는 SQL·키·값이 섞일 수 있다). 이 실패는 PortFailure 로 바뀌어 원인이 사라진다
+            AppLogger.current()
+                    .warn(
+                            "terms acceptance store call failed",
+                            LogField.errorType(error.getClass().getName()),
+                            LogField.safeStackTrace(error));
             throw unavailable();
         }
     }
 
     @Override
     public void accept(UUID userId, UUID termsVersionId, Instant acceptedAt) {
+        AppLogger.current()
+                .info("terms acceptance save", LogField.param("terms_version_id", termsVersionId));
         try {
             var transaction = new TransactionTemplate(transactionManager);
             transaction.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
@@ -45,6 +57,12 @@ public class JdbcTermsAcceptanceStore implements TermsAcceptanceStore {
                                     termsVersionId,
                                     Timestamp.from(acceptedAt)));
         } catch (RuntimeException error) {
+            // 원인은 예외 클래스 이름과 스택 프레임만 남긴다(메시지에는 SQL·키·값이 섞일 수 있다). 이 실패는 PortFailure 로 바뀌어 원인이 사라진다
+            AppLogger.current()
+                    .warn(
+                            "terms acceptance store call failed",
+                            LogField.errorType(error.getClass().getName()),
+                            LogField.safeStackTrace(error));
             throw unavailable();
         }
     }

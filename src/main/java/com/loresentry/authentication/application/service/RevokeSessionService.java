@@ -5,6 +5,8 @@ import static com.loresentry.authentication.application.port.in.AuthFailure.Reas
 import com.loresentry.authentication.application.port.in.*;
 import com.loresentry.authentication.application.port.out.*;
 import com.loresentry.authentication.domain.SessionId;
+import com.loresentry.authentication.logging.AppLogger;
+import com.loresentry.authentication.logging.LogField;
 import java.util.function.LongConsumer;
 import java.util.function.LongSupplier;
 
@@ -35,6 +37,8 @@ public final class RevokeSessionService implements RevokeSessionUseCase {
     }
 
     public void revoke(String value) {
+        // 세션 ID는 인증 수단이라 남기지 않는다
+        AppLogger.current().info("session revoke");
         SessionId id;
         try {
             id = new SessionId(value);
@@ -53,6 +57,12 @@ public final class RevokeSessionService implements RevokeSessionUseCase {
                 store.revoke(id);
                 return;
             } catch (PortFailure e) {
+                // 재시도할 수 있는 실패면 다음 시도로 넘어간다. 몇 번째 시도가 어떤 종류로 실패했는지 남긴다
+                AppLogger.current()
+                        .warn(
+                                "session revoke attempt failed",
+                                LogField.param("attempt", attempt),
+                                LogField.errorType(e.kind().name()));
                 if (e.kind() == PortFailure.Kind.INVALID_DATA)
                     throw new AuthFailure(REVOCATION_UNCONFIRMED);
                 if (!e.retryable()) break;
