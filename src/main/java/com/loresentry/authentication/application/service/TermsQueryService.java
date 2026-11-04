@@ -10,18 +10,8 @@ import com.loresentry.authentication.domain.TermsVersion;
 import com.loresentry.authentication.logging.AppLogger;
 import com.loresentry.authentication.logging.LogField;
 import java.time.Clock;
-import java.util.Set;
 
 public final class TermsQueryService implements TermsQueryUseCase {
-    /** 동의 요청을 거절한 이유(consent request rejected 줄의 result.reason). 목록 밖의 값은 other로 남는다. */
-    private static final Set<String> CONSENT_REJECTIONS =
-            Set.of(
-                    "INVALID_ID",
-                    "NOT_FOUND",
-                    "ACCOUNT_MISSING",
-                    "NOT_CONSUMABLE",
-                    "REFRESH_FAILED");
-
     private final ConsentRequestStore requests;
     private final TermsVersionStore versions;
     private final AccountStore accounts;
@@ -48,7 +38,9 @@ public final class TermsQueryService implements TermsQueryUseCase {
             AppLogger.current()
                     .warn(
                             "consent request rejected",
-                            LogField.resultCode("reason", "INVALID_ID", CONSENT_REJECTIONS));
+                            LogField.errorType(AuthFailure.Reason.CONSENT_REQUEST_INVALID.name()),
+                            LogField.resultCode(
+                                    "reason", "INVALID_ID", TermsAcceptService.CONSENT_REJECTIONS));
             throw invalid();
         }
         try {
@@ -59,26 +51,41 @@ public final class TermsQueryService implements TermsQueryUseCase {
                                         AppLogger.current()
                                                 .warn(
                                                         "consent request rejected",
+                                                        LogField.errorType(
+                                                                AuthFailure.Reason
+                                                                        .CONSENT_REQUEST_INVALID
+                                                                        .name()),
                                                         LogField.resultCode(
                                                                 "reason",
                                                                 "NOT_FOUND",
-                                                                CONSENT_REJECTIONS));
+                                                                TermsAcceptService
+                                                                        .CONSENT_REJECTIONS));
                                         return invalid();
                                     });
+            // 동의 요청에서 처음 알게 된 사용자. 이 뒤의 줄(계정·약관·동의 요청 저장소 줄, 결과 줄 request completed)에 user.id가 붙는다
+            AppLogger.current().identify(pending.userId());
             if (accounts.findById(pending.userId()).isEmpty()) {
                 AppLogger.current()
-                        .withUser(pending.userId())
                         .warn(
                                 "consent request rejected",
+                                LogField.errorType(
+                                        AuthFailure.Reason.CONSENT_REQUEST_INVALID.name()),
                                 LogField.resultCode(
-                                        "reason", "ACCOUNT_MISSING", CONSENT_REJECTIONS));
+                                        "reason",
+                                        "ACCOUNT_MISSING",
+                                        TermsAcceptService.CONSENT_REJECTIONS));
                 throw invalid();
             }
             var version =
                     versions.current(clock.instant())
                             .orElseThrow(
                                     () -> {
-                                        AppLogger.current().warn("terms current version missing");
+                                        AppLogger.current()
+                                                .warn(
+                                                        "terms current version missing",
+                                                        LogField.errorType(
+                                                                AuthFailure.Reason.LOGIN_UNAVAILABLE
+                                                                        .name()));
                                         return new AuthFailure(
                                                 AuthFailure.Reason.LOGIN_UNAVAILABLE);
                                     });
@@ -89,13 +96,17 @@ public final class TermsQueryService implements TermsQueryUseCase {
                                     () -> {
                                         // 조회한 뒤 갱신하는 사이에 동의 요청이 만료·소모됐거나 사용자가 맞지 않는다
                                         AppLogger.current()
-                                                .withUser(pending.userId())
                                                 .warn(
                                                         "consent request rejected",
+                                                        LogField.errorType(
+                                                                AuthFailure.Reason
+                                                                        .CONSENT_REQUEST_INVALID
+                                                                        .name()),
                                                         LogField.resultCode(
                                                                 "reason",
                                                                 "REFRESH_FAILED",
-                                                                CONSENT_REJECTIONS));
+                                                                TermsAcceptService
+                                                                        .CONSENT_REJECTIONS));
                                         return invalid();
                                     });
             return new TermsView(version, text, refreshed.expiresAt());
@@ -116,7 +127,9 @@ public final class TermsQueryService implements TermsQueryUseCase {
                                     .info(
                                             "terms translation missing",
                                             LogField.code(
-                                                    "locale", requested.code(), Set.of("ko", "en")),
+                                                    "locale",
+                                                    requested.code(),
+                                                    SupportedLocale.CODES),
                                             LogField.param("terms_version_id", version.id()));
                             return version.original();
                         });

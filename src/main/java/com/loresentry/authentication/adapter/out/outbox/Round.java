@@ -2,7 +2,7 @@ package com.loresentry.authentication.adapter.out.outbox;
 
 /**
  * relay 의 한 회차의 결과. {@link OutboxPublisher#publishBatch()} 가 만들어 돌려주고 {@link OutboxRelay} 가 읽는다.
- * 부르는 쪽은 {@code outcome} 으로 다음 행동을 정하고, 개수는 요약 로그에 쓴다.
+ * 부르는 쪽은 {@code outcome} 으로 다음 행동을 정하고, 개수는 회차의 종료 줄(schedule run completed)에 쓴다.
  *
  * @param outcome 부르는 쪽이 다음에 할 일
  * @param published 발행 표시를 한 행의 수

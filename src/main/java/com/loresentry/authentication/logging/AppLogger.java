@@ -7,6 +7,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -14,10 +15,20 @@ import java.util.regex.Pattern;
  * 서비스 코드가 로그를 남기는 유일한 통로다(LOG_SCHEMA.md 5절). 어느 계층이든 {@code AppLogger.current().info(...)}로 찍는다.
  * gateway·content의 같은 이름 클래스와 같은 규칙·API다.
  *
+ * <p>서비스 코드가 쓰는 것은 {@link #current()}로 꺼낸 객체의 {@code info}·{@code warn}·{@code error}, 흐름 중간에 알게 된
+ * 사용자를 알리는 {@link #identify(UUID)}, 결과 줄에 이유를 맡기는 {@link #addToOutcome(LogField...)}, 응답 본문에 싣는
+ * {@link #traceId()}뿐이다. 객체를 만들고 바인딩하는 일(생성자, {@code with}, {@code withTag}, {@code withUser},
+ * {@code bind})과 팩토리가 시작·종료 줄을 쓰는 멤버({@code infoAt}·{@code warnAt}·{@code errorAt}, {@code
+ * callerOf}, {@code beforeFirstLine}, {@code outcomeFields})는 로깅 팩토리(adapter.out.logging의
+ * LogFlow·LogScope·TraceContext)만 부른다. 로그 패키지가 둘(core logging, adapter.out.logging)이라
+ * package-private으로 막을 수 없어 public이고, LoggingArchitectureTest가 두 패키지 밖에서 부르지 못하게 막는다(LOG_SCHEMA.md
+ * 5절 "만들기").
+ *
  * <p>흐름
  *
  * <ol>
- *   <li>시작점(HTTP 요청은 RequestLogFilter)이 그때 아는 값(traceId, spanId, userId)을 생성자 인자로 넘겨 만든다.
+ *   <li>시작점(HTTP 요청은 LogFlow.request, 스케줄 회차는 LogFlow.schedule·polling, outbox 행은 LogScope)이 그때 아는
+ *       값(traceId, spanId, userId)으로 만든다. 지금 span에서 만드는 일은 TraceContext가 돕는다.
  *   <li>{@link #bind(AppLogger)}로 요청 범위 저장소(ThreadLocal)에 넣는다. 같은 요청의 어느 계층이든 {@link #current()}로
  *       꺼낸다.
  *   <li>레벨은 info·warn·error만 있다. 필드는 {@link LogField}의 정해 둔 이름만 받으므로 이메일·세션 ID 같은 값이 들어갈 자리가 없다.
@@ -28,9 +39,13 @@ import java.util.regex.Pattern;
  * LogLine})을 만들고, 출력은 {@link LogSink}에 맡긴다. sink(adapter의 SLF4J 구현)는 앱이 시작할 때 config가 {@link
  * #install(LogSink)}로 꽂는다.
  *
- * <p>객체는 바꿀 수 없다. 나중에 아는 값은 {@link #withUser(UUID)}·{@link #with(LogField...)}가 만든 새 객체로 찍거나 다시
- * {@link #bind(AppLogger)}한다. 예외는 결과 필드 칸 하나다: 요청 하나의 객체들이 같은 칸을 함께 쓰고, 실패 이유를 {@link
- * #addToOutcome(LogField...)}로 맡기면 결과 줄(request completed)에 붙는다.
+ * <p>줄마다, 그리고 바인딩하는 동안 이 객체의 trace·span·user 값과 문맥 필드({@link #MDC_CONTEXT_KEYS})를 sink의 문맥(SLF4J
+ * MDC)에 넣는다. 그래서 같은 스레드에서 프레임워크가 찍는 줄에도 trace·user와 흐름의 문맥 필드가 붙는다.
+ *
+ * <p>객체는 바꿀 수 없다. 나중에 아는 값은 {@link #with(LogField...)}가 만든 새 객체를 다시 {@link #bind(AppLogger)}한다. 예외는
+ * 흐름 공유 칸({@link Shared}) 하나다: 흐름 하나(요청, 스케줄 회차, outbox 행)의 객체들이 같은 칸을 함께 쓴다. 실패 이유({@link
+ * #addToOutcome(LogField...)})는 결과 줄(request completed)에 붙고, 흐름 중간에 알게 된 사용자({@link
+ * #identify(UUID)})는 그 뒤의 모든 줄과 결과 줄에 붙는다.
  */
 public final class AppLogger {
     /** 같은 스레드의 프레임워크 줄에도 붙이는 문맥 키(SLF4J MDC). EcsLogFormatter가 같은 이름의 ECS 필드로 옮긴다. */
@@ -40,6 +55,22 @@ public final class AppLogger {
     public static final String USER_ID = "user.id";
 
     /**
+     * 문맥 필드({@link #with(LogField...)}) 중 sink 문맥(MDC)에도 넣는 이름(LOG_SCHEMA.md 5절 "문맥 필드와 프레임워크 줄").
+     * 흐름 하나(요청, 스케줄 회차, outbox 행) 동안 바뀌지 않는 값이다. EcsLogFormatter가 MDC의 이 이름만 꺼내, 같은 스레드에서
+     * 프레임워크(Spring, Hibernate, Lettuce 등)가 찍은 줄에도 붙인다. 목록 밖의 문맥 필드는 MDC에 넣지 않으므로 우리 줄에만 붙는다. 이 서비스는
+     * Kafka를 받지 않아 숫자 필드(kafka partition·offset)는 없다.
+     */
+    public static final List<String> MDC_CONTEXT_KEYS =
+            List.of(
+                    "http.request.method",
+                    "url.path",
+                    "http.route",
+                    "loresentry.schedule.name",
+                    "loresentry.cloudevent.id",
+                    "loresentry.cloudevent.type",
+                    "loresentry.cloudevent.subject");
+
+    /**
      * 줄을 실제로 출력하는 곳. 앱이 시작할 때 config(LoggingConfiguration)가 adapter의 구현을 {@link #install(LogSink)}로
      * 꽂는다. 꽂기 전에는 아무것도 출력하지 않는다. 요청을 처리하는 스레드들이 함께 읽으므로 volatile 이다.
      */
@@ -47,7 +78,7 @@ public final class AppLogger {
 
     private static final ThreadLocal<AppLogger> CURRENT = new ThreadLocal<>();
 
-    /** 바인딩이 없을 때(기동, 스케줄 작업, 프레임워크 콜백) 쓰는 객체. trace는 그때 열려 있는 span이 있으면 그 값이 붙는다. */
+    /** 바인딩이 없을 때(기동, 프레임워크 콜백) 쓰는 객체. 공유 칸이 없어 결과 필드·사용자가 쌓이지 않는다. */
     private static final AppLogger DETACHED =
             new AppLogger(null, null, null, List.of(), null, List.of());
 
@@ -88,17 +119,20 @@ public final class AppLogger {
     private final String spanId;
     private final String userId;
 
-    /** 이 객체로 찍는 모든 줄에 붙는 필드(예: 요청 하나의 url.path·http.route). */
+    /** 이 객체로 찍는 모든 줄에 붙는 필드(예: 요청 하나의 url.path·http.route, outbox 행 하나의 cloudevent.id). */
     private final List<LogField> context;
 
-    /** 결과 줄(request completed)에 붙일 필드. 요청 하나에서 만든 객체가 같은 목록을 함께 쓴다. 기본 객체는 null이라 쌓이지 않는다. */
-    private final List<LogField> outcome;
+    /**
+     * 흐름 하나에서 만든 객체(withUser·with·withTag로 만든 것 포함)가 함께 쓰는 칸. 결과 줄에 붙일 필드, 흐름 중간에 알게 된 사용자, 첫 줄 직전에
+     * 남길 시작 줄을 담는다. 바인딩이 없는 기본 객체는 null이라 아무것도 쌓이지 않는다.
+     */
+    private final Shared shared;
 
     /** 이 객체로 찍는 모든 줄의 tags. 정해 둔 이름만 쓴다(LOG_SCHEMA.md 2.3절). */
     private final List<String> tags;
 
     /**
-     * 요청·flow 시작점에서 만든다.
+     * 요청·flow 시작점에서 만든다. 로깅 팩토리(TraceContext)만 부른다.
      *
      * @param traceId 추적 라이브러리가 만든 현재 trace ID(32 hex). 없으면 null
      * @param spanId 현재 span ID(16 hex). 없으면 null
@@ -110,7 +144,7 @@ public final class AppLogger {
                 spanId,
                 userId == null ? null : userId.toString(),
                 List.of(),
-                new CopyOnWriteArrayList<>(),
+                new Shared(),
                 List.of());
     }
 
@@ -119,13 +153,13 @@ public final class AppLogger {
             String spanId,
             String userId,
             List<LogField> context,
-            List<LogField> outcome,
+            Shared shared,
             List<String> tags) {
         this.traceId = traceId;
         this.spanId = spanId;
         this.userId = userId;
         this.context = context;
-        this.outcome = outcome;
+        this.shared = shared;
         this.tags = tags;
     }
 
@@ -144,8 +178,9 @@ public final class AppLogger {
     }
 
     /**
-     * 객체를 지금 스레드에 바인딩한다. try-with-resources로 닫으면 이전 객체와 문맥(MDC) 값으로 되돌린다. 문맥에도 값을 넣어 두어, 같은 스레드에서
-     * 프레임워크(Spring, Tomcat, Lettuce 등)가 찍는 줄에도 trace·user가 붙는다.
+     * 객체를 지금 스레드에 바인딩한다. 로깅 팩토리만 부른다. try-with-resources로 닫으면 이전 객체와 문맥(MDC) 값으로 되돌린다. 문맥에도 값을 넣어
+     * 두어, 같은 스레드에서 프레임워크(Spring, Tomcat, Lettuce 등)가 찍는 줄에도 trace·user와 문맥 필드({@link
+     * #MDC_CONTEXT_KEYS})가 붙는다.
      */
     public static Binding bind(AppLogger logger) {
         var binding = new Binding(CURRENT.get(), sink.putContext(logger.contextValues()));
@@ -153,25 +188,40 @@ public final class AppLogger {
         return binding;
     }
 
-    /** 사용자를 더한 새 객체. 로그인처럼 요청 도중에 사용자를 알게 된 뒤의 줄에 쓴다. */
+    /** 사용자를 더한 새 객체. 시작점이 그때 아는 사용자(gateway가 보낸 X-User-Id)를 붙일 때 쓴다. 로깅 팩토리만 부른다. */
     public AppLogger withUser(UUID userId) {
         return new AppLogger(
-                traceId, spanId, userId == null ? null : userId.toString(), context, outcome, tags);
+                traceId, spanId, userId == null ? null : userId.toString(), context, shared, tags);
     }
 
-    /** 이 객체로 찍는 모든 줄에 붙일 필드를 더한 새 객체. */
+    /** 이 객체로 찍는 모든 줄에 붙일 필드를 더한 새 객체. 로깅 팩토리만 부른다. */
     public AppLogger with(LogField... fields) {
         var merged = new ArrayList<>(context);
         for (LogField field : fields) if (field != null) merged.add(field);
-        return new AppLogger(traceId, spanId, userId, List.copyOf(merged), outcome, tags);
+        return new AppLogger(traceId, spanId, userId, List.copyOf(merged), shared, tags);
     }
 
-    /** 이 객체로 찍는 모든 줄에 tags 값을 더한 새 객체. 예: 헬스체크 요청의 {@code health}(Logstash가 info 줄을 버린다). */
+    /**
+     * 이 객체로 찍는 모든 줄에 tags 값을 더한 새 객체. 예: 헬스체크 요청의 {@code health}(Logstash가 info 줄을 버린다). 로깅 팩토리만
+     * 부른다.
+     */
     public AppLogger withTag(String tag) {
         if (tag == null || tags.contains(tag)) return this;
         var merged = new ArrayList<>(tags);
         merged.add(tag);
-        return new AppLogger(traceId, spanId, userId, context, outcome, List.copyOf(merged));
+        return new AppLogger(traceId, spanId, userId, context, shared, List.copyOf(merged));
+    }
+
+    /**
+     * 흐름 중간에 알게 된 사용자를 알린다. 예: 로그인 callback에서 계정을 확인한 뒤의 사용자, 동의 요청에서 읽은 사용자, 탈퇴 이벤트 행의 사용자. 이 흐름의
+     * 공유 칸에 넣으므로, 이 뒤에 이 흐름이 찍는 모든 줄(store 줄, 다른 스레드로 옮긴 줄 포함)과 결과 줄에 {@code user.id}가 붙는다. 같은 스레드의
+     * 프레임워크 줄에도 붙도록 sink 문맥(MDC)에도 넣는다(바인딩이 닫히면 되돌아간다). 바인딩된 흐름이 없으면 아무것도 하지 않는다.
+     */
+    public void identify(UUID userId) {
+        if (shared == null || userId == null) return;
+        shared.user = userId.toString();
+        // 덮기 전 값은 버린다. 이 흐름의 바인딩이 닫힐 때 바인딩 전 값으로 되돌아간다
+        sink.putContext(Map.of(USER_ID, shared.user));
     }
 
     /**
@@ -179,13 +229,21 @@ public final class AppLogger {
      * 그래서 실패 요청 하나의 결과는 한 줄이다. 바인딩된 요청이 없으면 아무것도 하지 않는다.
      */
     public void addToOutcome(LogField... fields) {
-        if (outcome == null) return;
-        for (LogField field : fields) if (field != null) outcome.add(field);
+        if (shared == null) return;
+        for (LogField field : fields) if (field != null) shared.outcome.add(field);
     }
 
-    /** 맡겨진 결과 필드. 결과 줄을 쓰는 RequestLogFilter가 읽는다. */
+    /** 맡겨진 결과 필드. 결과 줄을 쓰는 로깅 팩토리(LogFlow.request)가 읽는다. */
     public LogField[] outcomeFields() {
-        return outcome == null ? new LogField[0] : outcome.toArray(LogField[]::new);
+        return shared == null ? new LogField[0] : shared.outcome.toArray(LogField[]::new);
+    }
+
+    /**
+     * 이 흐름의 첫 줄이 찍히기 직전에 한 번 부를 일을 맡긴다. 처리할 일이 있을 때만 줄을 남기는 폴링(LogFlow.polling)이 시작 줄을 늦게 남기는 데 쓴다.
+     * 바인딩이 없는 기본 객체면 아무것도 하지 않는다. 로깅 팩토리만 부른다.
+     */
+    public void beforeFirstLine(Runnable startLine) {
+        if (shared != null) shared.beforeFirstLine.set(startLine);
     }
 
     /** 에러 본문 trace_id에 싣는 값. 없으면 null. */
@@ -195,40 +253,89 @@ public final class AppLogger {
 
     /** 정상 동작의 진행 상황. 어느 계층에서 무엇을 처리 중인지와 도메인 ID를 남긴다. */
     public void info(String message, LogField... fields) {
-        emit(LogLine.Level.INFO, message, null, fields);
+        emit(null, LogLine.Level.INFO, message, null, fields);
     }
 
     /** 처리했지만 예상 밖인 상황(재시도, 충돌, 검증 실패, 거절). */
     public void warn(String message, LogField... fields) {
-        emit(LogLine.Level.WARN, message, null, fields);
+        emit(null, LogLine.Level.WARN, message, null, fields);
     }
 
     /** 예외를 함께 남기는 warn. 예외 클래스·메시지·스택이 error.* 필드로 들어간다. */
     public void warn(String message, Throwable cause, LogField... fields) {
-        emit(LogLine.Level.WARN, message, cause, fields);
+        emit(null, LogLine.Level.WARN, message, cause, fields);
     }
 
     /** 작업 하나의 실패. 예외 없이 분류만 남길 때는 {@link LogField#errorType(String)}을 함께 넘긴다. */
     public void error(String message, LogField... fields) {
-        emit(LogLine.Level.ERROR, message, null, fields);
+        emit(null, LogLine.Level.ERROR, message, null, fields);
     }
 
     /** 예외로 작업 하나가 실패했을 때. 예외 클래스·메시지·스택이 error.* 필드로 들어간다. */
     public void error(String message, Throwable cause, LogField... fields) {
-        emit(LogLine.Level.ERROR, message, cause, fields);
+        emit(null, LogLine.Level.ERROR, message, cause, fields);
     }
 
-    private void emit(LogLine.Level level, String message, Throwable cause, LogField[] fields) {
-        // 호출한 클래스·메서드: AppLogger 자신의 프레임을 건너뛴 첫 프레임
+    /**
+     * 줄 위치(log.logger·log.origin.function·log.layer·log.package)를 찍은 곳 대신 {@code origin} 프레임으로 남기는
+     * 줄. 로깅 팩토리(LogFlow)가 시작·종료 줄을 그 흐름을 연 메서드(예: OutboxPurge.run,
+     * RequestLogFilter.doFilterInternal) 자리에 남길 때 쓴다. 로깅 팩토리만 부른다.
+     */
+    public void infoAt(StackWalker.StackFrame origin, String message, LogField... fields) {
+        emit(origin, LogLine.Level.INFO, message, null, fields);
+    }
+
+    /** {@link #infoAt}의 warn. */
+    public void warnAt(StackWalker.StackFrame origin, String message, LogField... fields) {
+        emit(origin, LogLine.Level.WARN, message, null, fields);
+    }
+
+    /** {@link #infoAt}의 error. */
+    public void errorAt(StackWalker.StackFrame origin, String message, LogField... fields) {
+        emit(origin, LogLine.Level.ERROR, message, null, fields);
+    }
+
+    /**
+     * 로깅 팩토리를 부른 곳: AppLogger와 팩토리 클래스({@code factory})의 프레임을 건너뛴 첫 프레임. 팩토리가 흐름을 열 때 한 번 잡아 두고,
+     * 시작·종료 줄의 위치로 쓴다. 로깅 팩토리만 부른다.
+     */
+    public static StackWalker.StackFrame callerOf(Class<?> factory) {
+        return WALKER.walk(
+                frames ->
+                        frames.dropWhile(
+                                        f ->
+                                                f.getDeclaringClass() == AppLogger.class
+                                                        || f.getDeclaringClass() == factory)
+                                .findFirst()
+                                .orElse(null));
+    }
+
+    private void emit(
+            StackWalker.StackFrame origin,
+            LogLine.Level level,
+            String message,
+            Throwable cause,
+            LogField[] fields) {
+        // 호출한 클래스·메서드: AppLogger 자신의 프레임을 건너뛴 첫 프레임. 위치를 따로 받았으면(infoAt 등) 그 프레임이다
         StackWalker.StackFrame caller =
-                WALKER.walk(
-                        frames ->
-                                frames.dropWhile(f -> f.getDeclaringClass() == AppLogger.class)
-                                        .findFirst()
-                                        .orElse(null));
+                origin != null
+                        ? origin
+                        : WALKER.walk(
+                                frames ->
+                                        frames.dropWhile(
+                                                        f ->
+                                                                f.getDeclaringClass()
+                                                                        == AppLogger.class)
+                                                .findFirst()
+                                                .orElse(null));
         // logger 이름은 찍은 클래스다. 그래서 logging.level 설정(예: com.loresentry 패키지)이 우리 줄에 그대로 적용된다
         String loggerName = caller == null ? AppLogger.class.getName() : caller.getClassName();
         if (!sink.enabled(loggerName, level)) return;
+        // 이 흐름의 첫 줄이면, 맡겨 둔 시작 줄을 먼저 남긴다(폴링). 시작 줄 자신이 다시 부르지 않도록 꺼낸 뒤 비운다
+        if (shared != null) {
+            Runnable startLine = shared.beforeFirstLine.getAndSet(null);
+            if (startLine != null) startLine.run();
+        }
         List<Map.Entry<String, Object>> pairs = new ArrayList<>();
         if (caller != null) {
             String[] location = LOCATION.get(caller.getDeclaringClass());
@@ -268,13 +375,33 @@ public final class AppLogger {
         return "other";
     }
 
-    /** 문맥(MDC)에 넣을 trace·span·user 값. 값이 null인 키는 sink가 지운다. */
+    /** 이 줄에 남길 사용자. 흐름 중간에 알린 사용자({@link #identify(UUID)})가 있으면 그 값이다. */
+    private String effectiveUser() {
+        return shared != null && shared.user != null ? shared.user : userId;
+    }
+
+    /**
+     * 문맥(MDC)에 넣을 trace·span·user 값과 문맥 필드({@link #MDC_CONTEXT_KEYS}). 값이 null인 키는 sink가 지운다. 이 객체에
+     * 없는 문맥 필드도 지우므로, 안쪽에서 다른 객체를 바인딩하면 MDC는 그 객체의 값만 갖는다(닫으면 되돌아온다).
+     */
     private Map<String, String> contextValues() {
         Map<String, String> values = new HashMap<>();
         values.put(TRACE_ID, traceId);
         values.put(SPAN_ID, spanId);
-        values.put(USER_ID, userId);
+        values.put(USER_ID, effectiveUser());
+        for (String key : MDC_CONTEXT_KEYS) values.put(key, contextValue(key));
         return values;
+    }
+
+    /** 문맥 필드 중 그 이름의 값(MDC는 문자열만 담는다). 없으면 null. 같은 이름이 둘이면 줄 출력과 같이 먼저 더한 값이다. */
+    private String contextValue(String key) {
+        for (LogField field : context) {
+            for (Map.Entry<String, Object> entry : field.entries()) {
+                if (key.equals(entry.getKey()) && entry.getValue() != null)
+                    return String.valueOf(entry.getValue());
+            }
+        }
+        return null;
     }
 
     /** {@link #bind(AppLogger)}의 범위. 닫으면 이전 객체와 문맥 값으로 되돌린다. */
@@ -292,6 +419,21 @@ public final class AppLogger {
             if (previous == null) CURRENT.remove();
             else CURRENT.set(previous);
             sink.restoreContext(previousContext);
+            // 안쪽 바인딩이 열려 있는 동안 바깥 흐름이 사용자를 알게 됐으면(identify), 되돌린 문맥에도 그 사용자를 다시 넣는다
+            if (previous != null && previous.effectiveUser() != null)
+                sink.putContext(Map.of(USER_ID, previous.effectiveUser()));
         }
+    }
+
+    /** 흐름 하나의 공유 칸. 그 흐름의 객체들이 같은 칸을 쓰고, 다른 스레드(Google·Redis 시간 제한용 가상 스레드)에서도 쓸 수 있어 스레드 안전하다. */
+    static final class Shared {
+        /** 결과 줄(request completed)에 붙일 필드. */
+        final List<LogField> outcome = new CopyOnWriteArrayList<>();
+
+        /** 흐름 중간에 알게 된 사용자({@link AppLogger#identify(UUID)}). 모르면 null. */
+        volatile String user;
+
+        /** 이 흐름의 첫 줄 직전에 한 번 부를 일(폴링의 늦은 시작 줄). 없으면 null. */
+        final AtomicReference<Runnable> beforeFirstLine = new AtomicReference<>();
     }
 }

@@ -38,7 +38,8 @@ public interface LogSink {
     void write(LogLine line);
 
     /**
-     * 같은 스레드에서 프레임워크가 찍는 줄에도 trace·span·user가 붙도록 값을 넣는다(SLF4J MDC). 값이 null인 키는 지운다.
+     * 같은 스레드에서 프레임워크가 찍는 줄에도 trace·span·user와 흐름의 문맥 필드({@link AppLogger#MDC_CONTEXT_KEYS})가 붙도록 값을
+     * 넣는다(SLF4J MDC). 값이 null인 키는 지운다.
      *
      * @return 덮기 전의 값. {@link #restoreContext(Map)}에 그대로 넘긴다
      */

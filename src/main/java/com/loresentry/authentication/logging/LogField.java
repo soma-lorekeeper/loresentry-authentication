@@ -1,5 +1,6 @@
 package com.loresentry.authentication.logging;
 
+import java.net.URI;
 import java.time.Duration;
 import java.util.Arrays;
 import java.util.Collection;
@@ -88,6 +89,11 @@ public final class LogField {
         return of("loresentry.cloudevent.type", type);
     }
 
+    /** 이벤트 대상(ce_subject). 그 이벤트가 상태를 담은 대상의 ID다(UserDeleted면 탈퇴한 사용자). 받는 서비스의 inbox 줄과 같은 필드다. */
+    public static LogField cloudeventSubject(UUID subject) {
+        return uuid("loresentry.cloudevent.subject", subject);
+    }
+
     // ---------------------------------------------------------------- 스케줄 작업 (loresentry.*)
 
     /**
@@ -100,7 +106,7 @@ public final class LogField {
 
     // ---------------------------------------------------------------- HTTP (ECS·OpenTelemetry)
 
-    /** 요청 메서드(GET, POST 등). */
+    /** 요청 메서드(GET, POST 등). 요청 시작점이 url.path·http.route와 함께 요청 하나의 모든 줄에 붙인다. */
     public static LogField httpMethod(String method) {
         return of("http.request.method", method);
     }
@@ -118,13 +124,31 @@ public final class LogField {
         return of("http.route", pattern);
     }
 
+    /** 나가는 호출(Google)의 대상 호스트. 들어온 요청이 아니라 나가는 호출의 결과 줄에만 쓴다. gateway의 같은 필드와 같다. */
+    public static LogField urlDomain(String host) {
+        return of("url.domain", host);
+    }
+
+    /**
+     * 나가는 호출의 대상 주소(scheme://host:port/path). ECS·OpenTelemetry HTTP client의 {@code url.full}이다. 같은
+     * 줄의 {@code url.path}는 이 서비스가 받은 요청의 경로라서, 나가는 호출의 경로는 이 필드로 본다. 쿼리는 넣지 않는다(OAuth 값이 들어갈 수 있다).
+     */
+    public static LogField urlFull(URI uri) {
+        if (uri == null) return null;
+        String port = uri.getPort() < 0 ? "" : ":" + uri.getPort();
+        return of("url.full", uri.getScheme() + "://" + uri.getHost() + port + uri.getRawPath());
+    }
+
     public static LogField statusCode(int status) {
         return of("http.response.status_code", (long) status);
     }
 
     // ---------------------------------------------------------------- 시간·에러 (ECS)
 
-    /** 걸린 시간. ECS event.duration은 나노초다. */
+    /**
+     * 걸린 시간. ECS event.duration은 나노초다. 시간은 로깅 팩토리(adapter.out.logging의 LogFlow)만 잰다. 로그 패키지가 둘이라
+     * public이지만, 서비스 코드가 시간을 재서 넘기지 않도록 LoggingArchitectureTest가 두 로그 패키지 밖에서 부르지 못하게 막는다.
+     */
     public static LogField duration(Duration duration) {
         return of("event.duration", duration == null ? null : duration.toNanos());
     }
@@ -137,6 +161,14 @@ public final class LogField {
     /** 상대가 돌려준 오류 코드(예: Google 토큰 응답의 error). 정해진 값만 넘긴다. */
     public static LogField errorCode(String code) {
         return of("error.code", code);
+    }
+
+    /**
+     * 상대가 돌려준 오류 코드 중 아무 문자열이나 올 수 있는 값(브라우저가 보낸 OAuth 콜백 error, Google 응답의 error). 허용 목록(표준
+     * OAuth·OIDC 오류 코드)은 도메인 코드 목록이라 부르는 쪽이 넘긴다. 목록 안이면 그대로, 밖이면 other로 남긴다.
+     */
+    public static LogField errorCode(String code, Set<String> allowed) {
+        return of("error.code", code == null ? null : (allowed.contains(code) ? code : OTHER));
     }
 
     /**

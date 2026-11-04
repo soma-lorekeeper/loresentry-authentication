@@ -68,33 +68,28 @@ public final class LoginService implements LoginUseCase {
         var loginState = consumeLoginRequest(command);
         if (command.error() != null && !command.error().isBlank()) {
             // 공급자가 거절한 이유를 결과 줄(request completed)의 error.code로 맡긴다. 목록 밖의 값은 other다
-            AppLogger.current()
-                    .addToOutcome(
-                            LogField.errorCode(
-                                    PROVIDER_ERRORS.contains(command.error())
-                                            ? command.error()
-                                            : "other"));
+            AppLogger.current().addToOutcome(LogField.errorCode(command.error(), PROVIDER_ERRORS));
             throw new AuthFailure(OAUTH_LOGIN_DENIED, CONSUMED);
         }
         try {
             var identity = oidcClient.exchange(command.code(), loginState);
             // Account registration returns only after the DB transaction commits.
             var user = accountRegistration.register(identity);
+            // 콜백 요청에는 X-User-Id가 없어서, 여기서 처음 알게 된 사용자를 알린다. 이 뒤의 줄(약관 확인, 세션 저장소, 결과 줄
+            // request completed)에 user.id가 붙는다
+            AppLogger.current().identify(user.id());
             var required = terms.check(user.id());
             if (required.isPresent()) {
-                // 로그인 결과 줄. 콜백 요청에는 X-User-Id가 없어서, 여기서 처음 알게 된 사용자를 붙인다.
-                // 동의 요청 ID는 로그인을 이어 갈 수 있는 값이라 남기지 않는다
+                // 로그인 결과 줄. 동의 요청 ID는 로그인을 이어 갈 수 있는 값이라 남기지 않는다
                 AppLogger.current()
-                        .withUser(user.id())
                         .info(
                                 "login callback completed",
                                 LogField.result("status", LoginStatus.TERMS_REQUIRED));
                 return LoginResult.termsRequired(required.get().id(), required.get().expiresAt());
             }
             var result = createSession(user.id());
-            // 로그인 결과 줄(사용자 포함). 세션 ID는 인증 수단이라 남기지 않는다
+            // 로그인 결과 줄. 세션 ID는 인증 수단이라 남기지 않는다
             AppLogger.current()
-                    .withUser(user.id())
                     .info("login callback completed", LogField.result("status", result.status()));
             return result;
         } catch (PortFailure failure) {

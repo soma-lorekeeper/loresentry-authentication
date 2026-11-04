@@ -29,7 +29,12 @@ public final class TermsLoginService implements TermsLoginGate {
                     versions.current(clock.instant())
                             .orElseThrow(
                                     () -> {
-                                        AppLogger.current().warn("terms current version missing");
+                                        AppLogger.current()
+                                                .warn(
+                                                        "terms current version missing",
+                                                        LogField.errorType(
+                                                                AuthFailure.Reason.LOGIN_UNAVAILABLE
+                                                                        .name()));
                                         return new AuthFailure(
                                                 AuthFailure.Reason.LOGIN_UNAVAILABLE);
                                     });
@@ -41,7 +46,10 @@ public final class TermsLoginService implements TermsLoginGate {
                     return Optional.of(new Required(id, pending.get().expiresAt()));
                 // 같은 ID의 동의 요청이 이미 있어 새 ID로 다시 만든다. ID 값은 남기지 않는다
                 AppLogger.current()
-                        .warn("consent request id collision", LogField.param("attempt", attempt));
+                        .warn(
+                                "consent request id collision",
+                                LogField.errorType("CONSENT_REQUEST_ID_COLLISION"),
+                                LogField.param("attempt", attempt));
             }
             throw new AuthFailure(AuthFailure.Reason.LOGIN_UNAVAILABLE);
         } catch (PortFailure error) {

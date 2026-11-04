@@ -1,16 +1,20 @@
 package com.loresentry.authentication.adapter.out.logging;
 
 import com.loresentry.authentication.logging.AppLogger;
+import io.micrometer.context.ContextExecutorService;
 import io.micrometer.context.ContextRegistry;
+import io.micrometer.context.ContextSnapshotFactory;
 import io.micrometer.context.ThreadLocalAccessor;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 /**
  * 스레드를 옮길 때 {@link AppLogger}도 함께 옮기는 context-propagation 접근자(LOG_SCHEMA.md 5절 "스레드를 옮기는 곳은 객체를 함께
  * 옮긴다").
  *
- * <p>Google 토큰 교환과 Redis 명령은 시간 제한을 걸려고 가상 스레드 실행기에서 돈다. 그 실행기를 {@code ContextExecutorService}로
- * 감싸면, 맡길 때의 AppLogger와 span(Spring이 등록한 observation 접근자)이 새 스레드로 함께 옮겨 간다. 그래서 그 스레드에서 찍은 줄도 원래
- * 요청의 trace·user를 갖는다.
+ * <p>Google 토큰 교환과 Redis 명령은 시간 제한을 걸려고 가상 스레드 실행기({@link #virtualThreadExecutor()})에서 돈다. 그 실행기는
+ * {@code ContextExecutorService}로 감싸여 있어, 맡길 때의 AppLogger와 span(Spring이 등록한 observation 접근자)이 새
+ * 스레드로 함께 옮겨 간다. 그래서 그 스레드에서 찍은 줄도 원래 요청의 trace·user를 갖는다.
  */
 public final class AppLoggerAccessor implements ThreadLocalAccessor<AppLogger> {
     /** context-propagation에 등록하는 이름. */
@@ -25,6 +29,19 @@ public final class AppLoggerAccessor implements ThreadLocalAccessor<AppLogger> {
         boolean registered =
                 registry.getThreadLocalAccessors().stream().anyMatch(a -> KEY.equals(a.key()));
         if (!registered) registry.registerThreadLocalAccessor(new AppLoggerAccessor());
+    }
+
+    /**
+     * 시간 제한을 걸려고 따로 도는 가상 스레드 실행기(Google 토큰 교환, Redis 세션 명령). {@code ContextExecutorService}로 감싸,
+     * 작업을 맡길 때의 AppLogger·span을 새 스레드로 함께 옮긴다. 그래서 그 스레드에서 찍힌 줄(호출 결과 줄 포함)도 원래 요청의 trace·user를
+     * 갖는다. 스레드를 옮기는 실행기도 로깅 팩토리가 만든다(LOG_SCHEMA.md 5절 "만들기"). Spring 없이 만드는 테스트에서도 옮겨지도록 이 접근자를 먼저
+     * 등록한다.
+     */
+    public static ExecutorService virtualThreadExecutor() {
+        register();
+        return ContextExecutorService.wrap(
+                Executors.newVirtualThreadPerTaskExecutor(),
+                () -> ContextSnapshotFactory.builder().build().captureAll());
     }
 
     @Override

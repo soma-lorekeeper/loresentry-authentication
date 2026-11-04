@@ -22,6 +22,8 @@ import org.springframework.boot.test.system.CapturedOutput;
 import org.springframework.boot.test.system.OutputCaptureExtension;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.scheduling.support.CronExpression;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.json.JsonMapper;
 
 /**
  * 정리 작업이 지워야 할 행만 지우는지, 그리고 돌 때마다 흔적을 남기는지 확인한다. 스케줄러가 부르기를 기다리지 않고 테스트가 {@code run()} 을 직접 부른다.
@@ -29,8 +31,8 @@ import org.springframework.scheduling.support.CronExpression;
  * <p>Kafka 는 필요 없어서 DB 만 쓰는 {@link DatabaseTestSupport} 위에 얹는다. 행은 SQL 로 직접 넣고, 발행 시각과 격리 시각을 지금
  * 기준으로 정한다. 경계(7일)에서 한 시간씩 떨어뜨려 두어, 테스트가 도는 몇 밀리초로는 결과가 바뀌지 않는다.
  *
- * <p>{@link OutputCaptureExtension} 은 테스트가 도는 동안 찍힌 로그를 모아 준다. 정리 작업의 로그 문구는 운영에서 "오늘 돌았는가"를 보는
- * 기준이므로, 문구가 바뀌면 테스트가 알아채게 한다.
+ * <p>{@link OutputCaptureExtension} 은 테스트가 도는 동안 찍힌 로그를 모아 준다. 정리 작업의 시작·종료 줄은 운영에서 "오늘 돌았는가"를 보는
+ * 기준이므로, 문구나 필드가 바뀌면 테스트가 알아채게 한다.
  */
 @SpringBootTest
 @ExtendWith(OutputCaptureExtension.class)
@@ -78,6 +80,28 @@ class OutboxPurgeTest extends DatabaseTestSupport {
                 .single();
     }
 
+    /** 정리 작업 1회가 남긴 줄(작업 이름 outbox-purge 가 붙은 ECS JSON 줄). */
+    private static List<JsonNode> purgeLines(CapturedOutput output) {
+        var json = JsonMapper.builder().build();
+        return output.getOut()
+                .lines()
+                .filter(line -> line.startsWith("{"))
+                .map(json::readTree)
+                .filter(
+                        line ->
+                                "outbox-purge"
+                                        .equals(line.at("/loresentry/schedule/name").asString()))
+                .toList();
+    }
+
+    /** 그 문구로 남은 정리 작업의 줄. */
+    private static JsonNode purgeLine(CapturedOutput output, String message) {
+        return purgeLines(output).stream()
+                .filter(line -> message.equals(line.get("message").asString()))
+                .findFirst()
+                .orElseThrow();
+    }
+
     /** 지금 outbox 에 남아 있는 행의 id. */
     private List<UUID> remaining() {
         return jdbcClient.sql("select id from outbox_events").query(UUID.class).list();
@@ -103,8 +127,10 @@ class OutboxPurgeTest extends DatabaseTestSupport {
 
         assertThat(remaining()).containsExactlyInAnyOrder(stillKept, pending, quarantined);
         assertThat(remaining()).doesNotContain(expired);
-        // 운영에서 이 문구로 정리 작업의 결과를 본다.
-        assertThat(output.getOut()).contains("outbox purge: deleted=1, took=");
+        // 운영에서 이 종료 줄로 정리 작업의 결과를 본다. 지운 수와 걸린 시간이 필드로 남는다.
+        JsonNode completed = purgeLine(output, "schedule run completed");
+        assertThat(completed.at("/loresentry/result/deleted").asLong()).isEqualTo(1L);
+        assertThat(completed.at("/event/duration").isNumber()).isTrue();
     }
 
     /** 지울 것이 없어도 한 줄을 남긴다. 하루 한 번 도는 작업이라, 줄이 없으면 "지울 것이 없었다"와 "돌지 않았다"를 구분할 수 없다. */
@@ -112,7 +138,11 @@ class OutboxPurgeTest extends DatabaseTestSupport {
     void leavesALineEvenWhenThereWasNothingToDelete(CapturedOutput output) {
         purge.run();
 
-        assertThat(output.getOut()).contains("outbox purge: deleted=0, took=");
+        assertThat(
+                        purgeLine(output, "schedule run completed")
+                                .at("/loresentry/result/deleted")
+                                .asLong())
+                .isZero();
     }
 
     /**
@@ -128,8 +158,10 @@ class OutboxPurgeTest extends DatabaseTestSupport {
         // 예외가 여기까지 올라오지 않는다.
         new OutboxPurge(broken, Clock.systemUTC()).run();
 
-        assertThat(output.getOut())
-                .contains("outbox purge failed: reason=java.lang.IllegalStateException");
+        JsonNode failed = purgeLine(output, "schedule run failed");
+        assertThat(failed.at("/log/level").asString()).isEqualTo("ERROR");
+        assertThat(failed.at("/error/type").asString())
+                .isEqualTo("java.lang.IllegalStateException");
         // 예외의 메시지는 로그에 적지 않는다.
         assertThat(output.getOut()).doesNotContain("database is down");
     }
@@ -162,33 +194,17 @@ class OutboxPurgeTest extends DatabaseTestSupport {
     void everyLineOfARunCarriesTheScheduleName(CapturedOutput output) {
         purge.run();
 
-        var json = tools.jackson.databind.json.JsonMapper.builder().build();
-        List<tools.jackson.databind.JsonNode> lines =
-                output.getOut()
-                        .lines()
-                        .filter(line -> line.startsWith("{"))
-                        .map(json::readTree)
-                        .filter(
-                                line ->
-                                        "outbox-purge"
-                                                .equals(
-                                                        line.at("/loresentry/schedule/name")
-                                                                .asString()))
-                        .toList();
-        assertThat(lines)
+        assertThat(purgeLines(output))
                 .extracting(line -> line.get("message").asString())
-                .contains("outbox purge start", "outbox published events delete")
-                .anyMatch(message -> message.startsWith("outbox purge: deleted="));
-        assertThat(
-                        lines.stream()
-                                .filter(
-                                        line ->
-                                                "outbox purge start"
-                                                        .equals(line.get("message").asString()))
-                                .findFirst()
-                                .orElseThrow()
-                                .at("/loresentry/param/retention_days")
-                                .asLong())
+                .containsSubsequence(
+                        "schedule run start",
+                        "outbox published events delete",
+                        "schedule run completed");
+        JsonNode start = purgeLine(output, "schedule run start");
+        assertThat(start.at("/loresentry/param/retention_days").asLong())
                 .isEqualTo(OutboxPurge.RETENTION.toDays());
+        // 시작·종료 줄의 위치는 작업을 연 메서드(OutboxPurge.run, scheduler 레이어)다
+        assertThat(start.at("/log/layer").asString()).isEqualTo("scheduler");
+        assertThat(start.at("/log/origin/function").asString()).isEqualTo("run");
     }
 }

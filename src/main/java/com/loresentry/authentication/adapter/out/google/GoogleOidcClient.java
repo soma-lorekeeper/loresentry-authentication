@@ -1,13 +1,13 @@
 package com.loresentry.authentication.adapter.out.google;
 
+import com.loresentry.authentication.adapter.out.logging.AppLoggerAccessor;
+import com.loresentry.authentication.adapter.out.logging.LogFlow;
 import com.loresentry.authentication.application.port.out.OAuthStateStore;
 import com.loresentry.authentication.application.port.out.OidcClient;
 import com.loresentry.authentication.application.port.out.PortFailure;
 import com.loresentry.authentication.domain.OAuthSecrets;
 import com.loresentry.authentication.logging.AppLogger;
 import com.loresentry.authentication.logging.LogField;
-import io.micrometer.context.ContextExecutorService;
-import io.micrometer.context.ContextSnapshotFactory;
 import java.io.IOException;
 import java.net.URI;
 import java.net.http.HttpClient;
@@ -17,9 +17,11 @@ import java.util.List;
 import java.util.Set;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
+import org.springframework.http.HttpRequest;
+import org.springframework.http.client.ClientHttpRequestExecution;
+import org.springframework.http.client.ClientHttpResponse;
 import org.springframework.http.client.JdkClientHttpRequestFactory;
 import org.springframework.http.converter.FormHttpMessageConverter;
 import org.springframework.security.oauth2.client.authentication.OAuth2LoginAuthenticationToken;
@@ -74,12 +76,9 @@ public final class GoogleOidcClient implements OidcClient, AutoCloseable {
     private final ClientRegistration registration;
     private final HttpClient httpClient;
     private final OidcAuthorizationCodeAuthenticationProvider authenticationProvider;
-    // 시간 제한을 걸려고 따로 도는 가상 스레드. ContextExecutorService 로 감싸 맡길 때의 AppLogger·span 을 새 스레드로 옮긴다
-    // (LoggingConfiguration 이 AppLogger 접근자를 등록한다). 그래서 그 스레드에서 찍힌 줄도 원래 요청의 trace 를 갖는다.
-    private final ExecutorService exchangeExecutor =
-            ContextExecutorService.wrap(
-                    Executors.newVirtualThreadPerTaskExecutor(),
-                    () -> ContextSnapshotFactory.builder().build().captureAll());
+    // 시간 제한을 걸려고 따로 도는 가상 스레드. 맡길 때의 AppLogger·span 을 새 스레드로 옮기는 실행기라, 그 스레드에서 찍힌
+    // 줄(Google 호출 결과 줄 포함)도 원래 요청의 trace·user 를 갖는다.
+    private final ExecutorService exchangeExecutor = AppLoggerAccessor.virtualThreadExecutor();
 
     public GoogleOidcClient(GoogleSettings settings, Clock clock) {
         this(settings, clock, GOOGLE);
@@ -134,26 +133,27 @@ public final class GoogleOidcClient implements OidcClient, AutoCloseable {
         // 인증 코드·state·nonce·code_verifier·토큰·신원(subject·이메일·이름)은 남기지 않는다
         AppLogger.current().info("google token exchange call");
         validateExchangeState(state);
-        // 코드 교환과 신원 검증에 걸린 시간을 재는 시작점(흘러간 시간만 잰다)
-        long started = System.nanoTime();
+        // 토큰 교환·JWKS 조회 HTTP 호출마다의 결과 줄(google call completed·failed, 걸린 시간)은 그 호출을 감싼 LogFlow 가
+        // 남긴다
         var exchangeTask = exchangeExecutor.submit(() -> exchangeAndVerifyIdentity(code, state));
         try {
-            var identity = exchangeTask.get(EXCHANGE_TIMEOUT_SECONDS, TimeUnit.SECONDS);
-            AppLogger.current()
-                    .info(
-                            "google token exchange call completed",
-                            LogField.duration(Duration.ofNanos(System.nanoTime() - started)));
-            return identity;
+            return exchangeTask.get(EXCHANGE_TIMEOUT_SECONDS, TimeUnit.SECONDS);
         } catch (TimeoutException failure) {
             exchangeTask.cancel(true);
             // 느린 외부 호출. 공급자에서 코드가 이미 쓰였을 수 있어 다시 시도하지 않는다
             AppLogger.current()
                     .warn(
                             "google token exchange call timed out",
+                            LogField.errorType(failure.getClass().getName()),
+                            LogField.safeStackTrace(failure),
                             LogField.param("timeout_seconds", EXCHANGE_TIMEOUT_SECONDS));
             throw failure(PortFailure.Kind.UNAVAILABLE);
         } catch (InterruptedException failure) {
-            AppLogger.current().warn("google token exchange call interrupted");
+            AppLogger.current()
+                    .warn(
+                            "google token exchange call interrupted",
+                            LogField.errorType(failure.getClass().getName()),
+                            LogField.safeStackTrace(failure));
             exchangeTask.cancel(true);
             Thread.currentThread().interrupt();
             throw failure(PortFailure.Kind.UNAVAILABLE);
@@ -213,6 +213,8 @@ public final class GoogleOidcClient implements OidcClient, AutoCloseable {
                                             new OAuth2AccessTokenResponseHttpMessageConverter());
                                 })
                         .defaultStatusHandler(new OAuth2ErrorResponseErrorHandler())
+                        // 토큰 교환 HTTP 호출의 결과 줄
+                        .requestInterceptor(GoogleOidcClient::send)
                         .build();
         var tokenClient = new RestClientAuthorizationCodeTokenResponseClient();
         tokenClient.setRestClient(restClient);
@@ -224,10 +226,13 @@ public final class GoogleOidcClient implements OidcClient, AutoCloseable {
             JdkClientHttpRequestFactory requestFactory,
             Endpoints endpoints,
             Clock clock) {
+        var jwks = new RestTemplate(requestFactory);
+        // JWKS 조회 HTTP 호출의 결과 줄. 키는 Nimbus 가 캐시하므로 캐시가 비었을 때만 불린다
+        jwks.getInterceptors().add(GoogleOidcClient::send);
         var decoder =
                 NimbusJwtDecoder.withJwkSetUri(endpoints.jwks())
                         .jwsAlgorithm(SignatureAlgorithm.RS256)
-                        .restOperations(new RestTemplate(requestFactory))
+                        .restOperations(jwks)
                         .build();
         var identityValidator = new OidcIdTokenValidator(registration);
         identityValidator.setClock(clock);
@@ -272,6 +277,7 @@ public final class GoogleOidcClient implements OidcClient, AutoCloseable {
             AppLogger.current()
                     .warn(
                             "google identity rejected",
+                            LogField.errorType(PortFailure.Kind.INVALID_IDENTITY.name()),
                             LogField.resultCode("reason", "STATE_MISMATCH", IDENTITY_REJECTIONS));
             throw failure(PortFailure.Kind.INVALID_IDENTITY);
         }
@@ -295,6 +301,7 @@ public final class GoogleOidcClient implements OidcClient, AutoCloseable {
             AppLogger.current()
                     .warn(
                             "google identity rejected",
+                            LogField.errorType(PortFailure.Kind.INVALID_IDENTITY.name()),
                             LogField.resultCode("reason", "NO_RESULT", IDENTITY_REJECTIONS));
             throw failure(PortFailure.Kind.INVALID_IDENTITY);
         }
@@ -305,6 +312,7 @@ public final class GoogleOidcClient implements OidcClient, AutoCloseable {
             AppLogger.current()
                     .warn(
                             "google identity rejected",
+                            LogField.errorType(PortFailure.Kind.INVALID_IDENTITY.name()),
                             LogField.resultCode("reason", "MISSING_SUBJECT", IDENTITY_REJECTIONS));
             throw failure(PortFailure.Kind.INVALID_IDENTITY);
         }
@@ -325,7 +333,7 @@ public final class GoogleOidcClient implements OidcClient, AutoCloseable {
                 .warn(
                         "google token exchange call failed",
                         LogField.errorType(cause == null ? null : cause.getClass().getName()),
-                        LogField.errorCode(oauthErrorCode(cause)),
+                        LogField.errorCode(oauthErrorCode(cause), OAUTH_ERROR_CODES),
                         LogField.safeStackTrace(cause));
         for (var nested = cause; nested != null; nested = nested.getCause()) {
             if (nested instanceof IOException || nested instanceof RestClientException) {
@@ -335,7 +343,7 @@ public final class GoogleOidcClient implements OidcClient, AutoCloseable {
         return failure(PortFailure.Kind.INVALID_IDENTITY);
     }
 
-    /** RFC 6749·OpenID Connect 의 표준 오류 코드. 이 목록 밖의 값은 남기지 않는다. */
+    /** RFC 6749·OpenID Connect 의 표준 오류 코드. 이 목록 밖의 값은 로그에 other 로 남는다. */
     private static final Set<String> OAUTH_ERROR_CODES =
             Set.of(
                     "invalid_request",
@@ -350,19 +358,35 @@ public final class GoogleOidcClient implements OidcClient, AutoCloseable {
                     "server_error",
                     "temporarily_unavailable");
 
-    /** 원인 사슬에서 Spring Security 가 읽은 OAuth 오류 코드. 허용 목록 밖이거나 없으면 null. */
+    /** 원인 사슬에서 Spring Security 가 읽은 OAuth 오류 코드. 없으면 null. */
     private static String oauthErrorCode(Throwable cause) {
         for (var nested = cause; nested != null; nested = nested.getCause()) {
             if (nested instanceof OAuth2AuthenticationException authentication) {
-                String code = authentication.getError().getErrorCode();
-                return OAUTH_ERROR_CODES.contains(code) ? code : null;
+                return authentication.getError().getErrorCode();
             }
             if (nested instanceof OAuth2AuthorizationException authorization) {
-                String code = authorization.getError().getErrorCode();
-                return OAUTH_ERROR_CODES.contains(code) ? code : null;
+                return authorization.getError().getErrorCode();
             }
         }
         return null;
+    }
+
+    /**
+     * Google 로 나가는 HTTP 호출(토큰 교환 POST, JWKS 조회 GET) 하나를 보낸다. 결과 줄(google call completed·failed)에 대상
+     * 호스트·주소(쿼리 제외), 응답 상태, 걸린 시간이 남는다. 요청·응답 본문과 헤더(인증 코드, client secret, 토큰)는 남지 않는다. 토큰 교환 결과로
+     * 바뀌는 실패(invalid_grant 등)는 이 호출의 응답 상태와 아래 google token exchange call failed 줄로 본다.
+     */
+    private static ClientHttpResponse send(
+            HttpRequest request, byte[] body, ClientHttpRequestExecution execution)
+            throws IOException {
+        return LogFlow.call(
+                "google",
+                request.getURI(),
+                call -> {
+                    ClientHttpResponse response = execution.execute(request, body);
+                    call.status(response.getStatusCode().value());
+                    return response;
+                });
     }
 
     private PortFailure failure(PortFailure.Kind kind) {

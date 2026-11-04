@@ -3,12 +3,12 @@ package com.loresentry.authentication.adapter.in.web;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import com.loresentry.authentication.application.port.in.TermsAcceptUseCase;
 import com.loresentry.authentication.application.port.in.TermsQueryUseCase;
+import com.loresentry.authentication.domain.SupportedLocale;
 import com.loresentry.authentication.logging.AppLogger;
 import com.loresentry.authentication.logging.LogField;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotNull;
 import java.time.Instant;
-import java.util.Set;
 import java.util.UUID;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseEntity;
@@ -65,7 +65,9 @@ public class TermsController {
             @RequestParam(value = "locale", required = false) String locale) {
         // 동의 요청 ID(X-Consent-Request-Id)는 남기지 않는다. 언어는 지원 언어면 그대로, 그 밖의 값은 other로 남는다
         AppLogger.current()
-                .info("terms get requested", LogField.code("locale", locale, Set.of("ko", "en")));
+                .info(
+                        "terms get requested",
+                        LogField.code("locale", locale, SupportedLocale.CODES));
         var view = query.query(id, locale);
         var terms = view.terms();
         var text = view.text();

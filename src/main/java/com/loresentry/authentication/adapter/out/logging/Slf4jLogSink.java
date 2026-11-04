@@ -20,7 +20,7 @@ import org.slf4j.spi.LoggingEventBuilder;
  * <ul>
  *   <li>logger 이름은 그 줄을 찍은 클래스다(LogLine.loggerName). 그래서 logging.level 설정이 우리 줄에 그대로 적용된다.
  *   <li>위치와 필드(LogLine.keyValues)는 key-value로, tags는 marker로, 예외는 cause로 넘긴다.
- *   <li>문맥(trace·span·user)은 MDC에 넣어 같은 스레드의 프레임워크 줄에도 붙게 한다.
+ *   <li>문맥(trace·span·user와 흐름의 경로·메서드·스케줄 이름·이벤트 값)은 MDC에 넣어 같은 스레드의 프레임워크 줄에도 붙게 한다.
  * </ul>
  */
 public final class Slf4jLogSink implements LogSink {

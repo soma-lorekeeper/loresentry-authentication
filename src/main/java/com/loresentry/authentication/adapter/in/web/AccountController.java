@@ -4,6 +4,7 @@ import com.loresentry.authentication.adapter.in.web.dto.AuthRequests;
 import com.loresentry.authentication.adapter.in.web.dto.AuthResponses;
 import com.loresentry.authentication.adapter.in.web.mapper.AuthResponseMapper;
 import com.loresentry.authentication.application.port.in.*;
+import com.loresentry.authentication.domain.SupportedLocale;
 import com.loresentry.authentication.logging.AppLogger;
 import com.loresentry.authentication.logging.LogField;
 import jakarta.servlet.http.HttpServletRequest;
@@ -47,7 +48,7 @@ public class AccountController {
         AppLogger.current()
                 .info(
                         "account locale change requested",
-                        LogField.code("locale", body.locale(), Set.of("ko", "en")));
+                        LogField.code("locale", body.locale(), SupportedLocale.CODES));
         UUID id = userId(request);
         return profile(accounts.changeLocale(id, body.locale()));
     }

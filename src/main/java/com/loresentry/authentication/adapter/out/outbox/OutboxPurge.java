@@ -1,7 +1,6 @@
 package com.loresentry.authentication.adapter.out.outbox;
 
-import com.loresentry.authentication.adapter.out.logging.TraceContext;
-import com.loresentry.authentication.logging.AppLogger;
+import com.loresentry.authentication.adapter.out.logging.LogFlow;
 import com.loresentry.authentication.logging.LogField;
 import com.loresentry.authentication.logging.LogLayer;
 import java.time.Clock;
@@ -14,7 +13,8 @@ import org.springframework.stereotype.Component;
 /**
  * 발행이 끝난 지 오래된 outbox 행을 하루 한 번 지운다. relay 는 보낸 행에 발행 표시만 하고 남겨 두므로, 이 작업이 없으면 테이블이 끝없이 커진다.
  *
- * <p>동작은 단순하다. 매일 정해진 시각에 깨어나, 지금에서 {@link #RETENTION} 을 뺀 시각보다 먼저 발행된 행을 한 번에 지우고, 지운 개수를 한 줄 남긴다.
+ * <p>동작은 단순하다. 매일 정해진 시각에 깨어나, 지금에서 {@link #RETENTION} 을 뺀 시각보다 먼저 발행된 행을 한 번에 지우고, 지운 개수를 종료 줄에
+ * 남긴다.
  *
  * <p>relay({@link OutboxRelay})와 서로 방해하지 않는다. relay 는 아직 보내지 않은 행만 건드리고 이 작업은 발행된 지 오래된 행만 건드린다.
  * 스케줄러에서도 cron 작업은 별도의 thread 에서 돌아, 1초마다 도는 relay 를 기다리게 하지 않는다.
@@ -51,52 +51,27 @@ class OutboxPurge {
     private final Clock clock;
 
     /**
-     * 스케줄러가 매일 한 번 부른다. 지우고, 결과를 한 줄 남긴다.
+     * 스케줄러가 매일 한 번 부른다. 지우고, 시작·종료 줄을 남긴다.
      *
      * <p>지운 것이 없어도 남긴다. 하루 한 번 도는 작업이라, 줄이 없으면 "지울 것이 없었다"와 "돌지 않았다"를 가릴 수 없기 때문이다. 그날 이 줄이 하나도 없으면
      * 돌지 않은 것이다.
      *
-     * <p>예외를 밖으로 내보내지 않는다. 내보내면 스케줄러가 예외 메시지와 SQL 이 든 오류를 찍는데, 이 저장소는 그것을 로그에 남기지 않는다. 받아서 예외의 종류와
-     * 스택 프레임만 남긴다. 실패한 날의 행은 다음 날 함께 지워진다.
+     * <p>예외를 밖으로 내보내지 않는다. 내보내면 스케줄러가 예외 메시지와 SQL 이 든 오류를 찍는데, 이 저장소는 그것을 로그에 남기지 않는다. LogFlow 가
+     * 받아서 예외의 종류와 메시지 없는 스택만 남긴다. 실패한 날의 행은 다음 날 함께 지워진다.
      */
     @Scheduled(cron = DAILY_AT_FOUR, zone = ZONE)
     void run() {
-        // 회차 하나의 시작점. 스케줄 observation 이 연 span 으로 로그 객체를 만들고 작업 이름을 붙여, 이 회차의 모든 줄(부른 repository 줄
-        // 포함)에 남게 한다
-        try (var bound =
-                AppLogger.bind(TraceContext.newLogger().with(LogField.scheduleName(SCHEDULE)))) {
-            // 로그에는 개수와 예외의 종류·스택 프레임만 적는다 — 예외 메시지와 SQL 은 적지 않는다.
-            // 시작 줄. 시작할 때 아는 값(보존 기간)을 함께 남긴다
-            AppLogger.current()
-                    .info(
-                            "outbox purge start",
-                            LogField.param("retention_days", RETENTION.toDays()));
-            // 걸린 시간을 재기 위한 시작점. 시각이 아니라 흘러간 시간만 재는 값이다.
-            long startedAt = System.nanoTime();
-            try {
-                // 지금에서 보존 기간을 뺀 시각. 이보다 먼저 발행된 행이 지워진다.
-                OffsetDateTime cutoff = OffsetDateTime.now(clock).minus(RETENTION);
-                int deleted = repository.deletePublishedBefore(cutoff);
-                Duration took = Duration.ofNanos(System.nanoTime() - startedAt);
-                // 이 문구로 로그를 찾는다. 바꾸면 조회와 알림이 함께 깨진다. deleted 가 커지는 추세가 보이면 한 번에
-                // 지우는 양에 상한을 둘 때다.
-                AppLogger.current()
-                        .info(
-                                "outbox purge: deleted="
-                                        + deleted
-                                        + ", took="
-                                        + took.toMillis()
-                                        + "ms",
-                                LogField.result("deleted", deleted),
-                                LogField.duration(took));
-            } catch (RuntimeException failure) {
-                // 삭제가 실패했다(예: DB 에 닿지 못함). 트랜잭션이 rollback 되어 지워진 것이 없다.
-                AppLogger.current()
-                        .error(
-                                "outbox purge failed: reason=" + failure.getClass().getName(),
-                                LogField.errorType(failure.getClass().getName()),
-                                LogField.safeStackTrace(failure));
-            }
-        }
+        // 회차 하나의 흐름. 로그 객체·시작 줄(보존 기간)·종료 줄(지운 수, 걸린 시간)·실패 줄은 LogFlow 가 남긴다(LOG_SCHEMA.md 5절).
+        // 실패해도 예외를 밖으로 내보내지 않는다. 트랜잭션이 rollback 되어 지워진 것이 없고, 남은 것은 다음 날 함께 지워진다.
+        LogFlow.schedule(
+                SCHEDULE,
+                run -> {
+                    // 지금에서 보존 기간을 뺀 시각. 이보다 먼저 발행된 행이 지워진다.
+                    OffsetDateTime cutoff = OffsetDateTime.now(clock).minus(RETENTION);
+                    // 지운 수는 종료 줄에 남는다. 커지는 추세가 보이면 한 번에 지우는 양에 상한을 둘 때다
+                    run.result(
+                            LogField.result("deleted", repository.deletePublishedBefore(cutoff)));
+                },
+                LogField.param("retention_days", RETENTION.toDays()));
     }
 }

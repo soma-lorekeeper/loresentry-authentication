@@ -11,11 +11,15 @@ import com.loresentry.authentication.support.*;
 import java.time.Instant;
 import java.util.*;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.test.system.CapturedOutput;
+import org.springframework.boot.test.system.OutputCaptureExtension;
 import org.springframework.context.ApplicationContext;
 import org.springframework.context.annotation.Import;
 import org.springframework.data.redis.core.StringRedisTemplate;
+import tools.jackson.databind.JsonNode;
 
 @SpringBootTest(
         webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT,
@@ -38,6 +42,73 @@ class FullLoginFlowTest extends HttpAuthTestSupport {
         assertThat(context.getBean(LoginUseCase.class)).isInstanceOf(LoginService.class);
         assertThat(context.getBean(LoginSessionStore.class))
                 .isInstanceOf(RedisLoginSessionStore.class);
+    }
+
+    /**
+     * 로그인 콜백 요청에는 X-User-Id가 없다. 로그인한 사용자를 알게 된 뒤의 줄(세션 저장소의 Redis 호출 결과 줄, 결과 줄 request
+     * completed)에 그 사용자가 user.id로 붙는다. 요청 하나의 우리 줄에는 받은 경로·메서드가 붙고, Google 토큰 교환 HTTP 호출은 결과 줄
+     * 하나(대상 주소, 응답 상태, 걸린 시간)를 남긴다. 그 호출은 가상 스레드에서 돌지만 같은 trace로 남는다.
+     */
+    @Test
+    @ExtendWith(OutputCaptureExtension.class)
+    void theCallbackLinesCarryTheUserOnceItIsKnown(CapturedOutput output) {
+        var subject = "log-" + UUID.randomUUID();
+        var trace = UUID.randomUUID().toString().replace("-", "");
+        var pending = pending(subject);
+        var result =
+                call(
+                        "POST",
+                        "/auth/oauth/google/callback",
+                        pending.body(),
+                        null,
+                        Map.of("traceparent", "00-" + trace + "-b7ad6b7169203331-01"));
+        assertThat(result.status()).isEqualTo(200);
+        var user = accounts.findByIdentity("google", subject).orElseThrow().user().id().toString();
+        List<JsonNode> lines =
+                output.getOut()
+                        .lines()
+                        .filter(line -> line.startsWith("{"))
+                        .map(mapper::readTree)
+                        .filter(line -> trace.equals(line.at("/trace/id").asString()))
+                        .toList();
+        assertThat(lines)
+                .filteredOn(line -> line.at("/log/logger").asString().startsWith("com.loresentry"))
+                .isNotEmpty()
+                .allSatisfy(
+                        line -> {
+                            assertThat(line.at("/url/path").asString())
+                                    .isEqualTo("/auth/oauth/google/callback");
+                            assertThat(line.at("/http/request/method").asString())
+                                    .isEqualTo("POST");
+                        });
+        assertThat(message(lines, "request received").has("user")).isFalse();
+        assertThat(message(lines, "login callback completed").at("/user/id").asString())
+                .isEqualTo(user);
+        JsonNode completed = message(lines, "request completed");
+        assertThat(completed.at("/user/id").asString()).isEqualTo(user);
+        assertThat(completed.at("/http/response/status_code").asLong()).isEqualTo(200L);
+        assertThat(lines)
+                .filteredOn(line -> "google call completed".equals(line.get("message").asString()))
+                .anySatisfy(
+                        line -> {
+                            assertThat(line.at("/url/full").asString()).endsWith("/token");
+                            assertThat(line.at("/url/domain").asString()).isEqualTo("127.0.0.1");
+                            assertThat(line.at("/http/response/status_code").asLong())
+                                    .isEqualTo(200L);
+                            assertThat(line.at("/event/duration").isNumber()).isTrue();
+                            assertThat(line.at("/log/layer").asString()).isEqualTo("client");
+                        });
+        assertThat(lines)
+                .filteredOn(line -> "redis call completed".equals(line.get("message").asString()))
+                .anySatisfy(line -> assertThat(line.at("/user/id").asString()).isEqualTo(user));
+    }
+
+    /** 그 문구로 남은 첫 줄. */
+    private static JsonNode message(List<JsonNode> lines, String message) {
+        return lines.stream()
+                .filter(line -> message.equals(line.get("message").asString()))
+                .findFirst()
+                .orElseThrow();
     }
 
     @Test

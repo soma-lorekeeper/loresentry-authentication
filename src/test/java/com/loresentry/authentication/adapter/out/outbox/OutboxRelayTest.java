@@ -2,20 +2,29 @@ package com.loresentry.authentication.adapter.out.outbox;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
 import com.loresentry.authentication.adapter.out.outbox.Round.Outcome;
+import com.loresentry.authentication.logging.AppLogger;
 import com.loresentry.authentication.support.Slf4jLogSinkExtension;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.InstantSource;
+import java.util.HashMap;
 import java.util.Iterator;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Supplier;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.slf4j.LoggerFactory;
 import org.springframework.boot.WebApplicationType;
 import org.springframework.boot.autoconfigure.ImportAutoConfiguration;
 import org.springframework.boot.autoconfigure.context.LifecycleAutoConfiguration;
@@ -49,6 +58,59 @@ class OutboxRelayTest {
     /** 가짜 회차가 불린 횟수. relay 가 회차를 돌았는지, 쉬느라 건너뛰었는지를 이 값으로 가린다. */
     private int calls;
 
+    /** 테스트를 도는 스레드. relay 를 직접 부르므로 relay 의 줄은 이 스레드에서 찍힌다. 다른 스레드의 줄은 모으지 않는다. */
+    private Thread testThread;
+
+    /** 이 테스트가 찍힌 줄을 모아 보는 appender. 문구와 필드(key-value)를 함께 본다. */
+    private final ListAppender<ILoggingEvent> events =
+            new ListAppender<>() {
+                @Override
+                protected void append(ILoggingEvent event) {
+                    if (Thread.currentThread() == testThread) super.append(event);
+                }
+            };
+
+    private final Logger root = (Logger) LoggerFactory.getLogger(org.slf4j.Logger.ROOT_LOGGER_NAME);
+
+    @BeforeEach
+    void attach() {
+        testThread = Thread.currentThread();
+        events.start();
+        root.addAppender(events);
+    }
+
+    @AfterEach
+    void detach() {
+        root.detachAppender(events);
+    }
+
+    /** relay 회차가 남긴 줄(작업 이름 outbox-relay 가 붙은 줄)의 문구. */
+    private List<String> relayMessages() {
+        return events.list.stream()
+                .filter(
+                        event ->
+                                "outbox-relay"
+                                        .equals(fields(event).get("loresentry.schedule.name")))
+                .map(ILoggingEvent::getFormattedMessage)
+                .toList();
+    }
+
+    /** 그 문구로 남은 첫 줄. */
+    private ILoggingEvent line(String message) {
+        return events.list.stream()
+                .filter(event -> message.equals(event.getFormattedMessage()))
+                .findFirst()
+                .orElseThrow();
+    }
+
+    /** 한 줄의 필드(key-value). 같은 이름은 먼저 넣은 값이 남는다(EcsLogFormatter와 같다). */
+    private static Map<String, Object> fields(ILoggingEvent event) {
+        Map<String, Object> out = new HashMap<>();
+        if (event.getKeyValuePairs() != null)
+            event.getKeyValuePairs().forEach(pair -> out.putIfAbsent(pair.key, pair.value));
+        return out;
+    }
+
     /** {@code published} 개를 보내고 문제없이 끝난 회차. */
     private static Round more(int published) {
         return new Round(Outcome.MORE, published, 0, 0);
@@ -59,12 +121,19 @@ class OutboxRelayTest {
         return new Round(Outcome.FAILED, 0, 0, failed);
     }
 
-    /** 넘겨받은 결과를 불릴 때마다 하나씩 차례로 돌려주는 가짜 회차. 불린 횟수도 센다. */
+    /**
+     * 넘겨받은 결과를 불릴 때마다 하나씩 차례로 돌려주는 가짜 회차. 불린 횟수도 센다. 실제 회차({@link
+     * OutboxPublisher#publishBatch()})처럼 보낼 행이 있던 회차는 시작 줄(outbox relay batch start)을 남긴다. 그 줄이
+     * relay 회차의 첫 줄이다.
+     */
     private Supplier<Round> scripted(Round... results) {
         Iterator<Round> remaining = List.of(results).iterator();
         return () -> {
             calls++;
-            return remaining.next();
+            Round next = remaining.next();
+            if (next.outcome() != Outcome.IDLE)
+                AppLogger.current().info("outbox relay batch start");
+            return next;
         };
     }
 
@@ -177,9 +246,18 @@ class OutboxRelayTest {
         // 예외가 여기까지 올라오지 않는다.
         relay.run();
 
-        // 운영에서 이 문구로 찾는다. 예외의 메시지는 로그에 적지 않는다.
-        assertThat(output.getOut())
-                .contains("outbox relay round threw: reason=java.lang.IllegalStateException");
+        // 운영에서 이 문구로 찾는다. 예외의 메시지는 로그에 적지 않는다. 회차의 종료 줄은 실패(warn, OUTBOX_SEND_FAILED)다
+        assertThat(relayMessages())
+                .containsExactly(
+                        "schedule run start", "outbox relay round failed", "schedule run failed");
+        assertThat(fields(line("outbox relay round failed")))
+                .containsEntry("error.type", "java.lang.IllegalStateException")
+                .containsKey("error.stack_trace");
+        assertThat(line("outbox relay round failed").getThrowableProxy()).isNull();
+        assertThat(line("schedule run failed").getLevel().toString()).isEqualTo("WARN");
+        assertThat(fields(line("schedule run failed")))
+                .containsEntry("error.type", OutboxRelay.RELAY_FAILED)
+                .containsEntry("loresentry.result.backoff_seconds", 1L);
         assertThat(output.getOut()).doesNotContain("database is down");
 
         // 실패와 같이 1초를 쉰다.
@@ -192,33 +270,56 @@ class OutboxRelayTest {
         assertThat(calls).isEqualTo(2);
     }
 
-    /** 요약은 여러 회차의 개수를 더해 한 줄로 남긴다. 한 일이 없으면 남기지 않는다 — 주기마다 불리므로 매번 남기면 로그가 "0건"으로 가득 찬다. */
+    /**
+     * 종료 줄은 여러 회차의 개수를 더해 결과 값으로 남긴다. 한 일이 없으면 시작·종료 줄 모두 남기지 않는다 — 주기마다 불리므로 매번 남기면 로그가 "0건"으로 가득
+     * 찬다.
+     */
     @Test
-    void logsOneSummaryLineOnlyWhenSomethingWasDone(CapturedOutput output) {
+    void leavesStartAndEndLinesOnlyWhenSomethingWasDone() {
         OutboxRelay relay =
                 relay(scripted(more(50), more(50), new Round(Outcome.MORE, 20, 1, 0), IDLE, IDLE));
 
-        // 회차 넷(셋은 보냈고 마지막은 빈 회차)의 합계가 한 줄에 실린다. 가짜 시계가 멈춰 있어 걸린 시간은 0 이다.
+        // 회차 넷(셋은 보냈고 마지막은 빈 회차)의 합계가 종료 줄 하나에 실린다.
         relay.run();
-        assertThat(output.getOut())
-                .contains(
-                        "outbox relay: published=120, quarantined=1, failed=0, rounds=4, took=0ms");
+        assertThat(relayMessages())
+                .containsExactly(
+                        "schedule run start",
+                        "outbox relay batch start",
+                        "outbox relay batch start",
+                        "outbox relay batch start",
+                        "schedule run completed");
+        assertThat(fields(line("schedule run completed")))
+                .containsEntry("loresentry.result.published", 120)
+                .containsEntry("loresentry.result.quarantined", 1)
+                .containsEntry("loresentry.result.failed", 0)
+                .containsEntry("loresentry.result.rounds", 4)
+                .containsKey("event.duration")
+                .doesNotContainKey("error.type");
+        // 시작·종료 줄의 위치는 회차를 연 relay 메서드다
+        assertThat(fields(line("schedule run start")))
+                .containsEntry("log.layer", "scheduler")
+                .containsEntry("log.origin.function", "run");
 
-        // 다음 호출은 할 일이 없었다. 요약이 더 늘지 않는다.
+        // 다음 호출은 할 일이 없었다. 줄이 더 늘지 않는다.
+        int before = events.list.size();
         relay.run();
-        assertThat(output.getOut()).containsOnlyOnce("outbox relay: published=");
+        assertThat(events.list).hasSize(before);
     }
 
-    /** 실패로 간격을 늘렸을 때는 요약에 그 간격도 적는다. 로그만 보고 relay 가 언제 다시 시도할지 알 수 있다. */
+    /** 실패로 간격을 늘렸을 때는 종료 줄이 실패(warn)이고 그 간격도 적는다. 로그만 보고 relay 가 언제 다시 시도할지 알 수 있다. */
     @Test
-    void addsTheRestToTheSummaryWhenARoundFailed(CapturedOutput output) {
+    void endsAFailedRoundWithAWarningAndTheBackoff() {
         OutboxRelay relay = relay(scripted(new Round(Outcome.FAILED, 30, 0, 20)));
 
         relay.run();
 
-        assertThat(output.getOut())
-                .contains(
-                        "outbox relay: published=30, quarantined=0, failed=20, rounds=1, took=0ms, backoff=1s");
+        ILoggingEvent end = line("schedule run failed");
+        assertThat(end.getLevel().toString()).isEqualTo("WARN");
+        assertThat(fields(end))
+                .containsEntry("error.type", "OUTBOX_SEND_FAILED")
+                .containsEntry("loresentry.result.published", 30)
+                .containsEntry("loresentry.result.failed", 20)
+                .containsEntry("loresentry.result.backoff_seconds", 1L);
     }
 
     /**
