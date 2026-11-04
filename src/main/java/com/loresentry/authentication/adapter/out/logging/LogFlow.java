@@ -2,6 +2,9 @@ package com.loresentry.authentication.adapter.out.logging;
 
 import com.loresentry.authentication.logging.AppLogger;
 import com.loresentry.authentication.logging.LogField;
+import io.opentelemetry.api.trace.Span;
+import io.opentelemetry.api.trace.StatusCode;
+import io.opentelemetry.context.Scope;
 import jakarta.servlet.ServletException;
 import java.io.IOException;
 import java.net.URI;
@@ -138,7 +141,7 @@ public final class LogFlow {
     // ---------------------------------------------------------------- 흐름 종류
 
     /**
-     * gateway가 부른 요청 하나. 서버 observation이 연 span과 HTTP 값으로 로그 객체를 만들어 바인딩한다({@link
+     * gateway가 부른 요청 하나. agent가 연 서버 span과 HTTP 값으로 로그 객체를 만들어 바인딩한다({@link
      * TraceContext#forRequest}). 요청 하나의 모든 줄에 url.path·http.route·http.request.method와 사용자가 붙는다. 시작
      * 줄({@code request received})을 남기고 할 일(필터 체인)을 한 뒤 종료 줄({@code request completed}, 응답 상태·걸린 시간과
      * 예외 처리기가 {@code addToOutcome}으로 맡긴 결과 필드)을 남긴다. 레벨은 응답 상태로 정한다: 5xx error, 4xx warn, 그 외 info.
@@ -185,8 +188,8 @@ public final class LogFlow {
     }
 
     /**
-     * 하루 한 번 도는 스케줄 작업 1회. 스케줄 observation이 연 span으로 새 로그 객체를 만들고 작업 이름(schedule.name)을 붙여 바인딩한다.
-     * 시작 줄({@code schedule run start}, 시작할 때 아는 값 {@code start})을 남기고 할 일을 한 뒤 종료 줄({@code schedule
+     * 하루 한 번 도는 스케줄 작업 1회. agent가 회차마다 연 span으로 새 로그 객체를 만들고 작업 이름(schedule.name)을 붙여 바인딩한다. 시작
+     * 줄({@code schedule run start}, 시작할 때 아는 값 {@code start})을 남기고 할 일을 한 뒤 종료 줄({@code schedule
      * run completed}, 결과 값·걸린 시간)을 남긴다.
      *
      * <p>할 일의 예외는 밖으로 내보내지 않는다. 내보내면 스케줄러가 예외 메시지와 SQL이 든 오류를 찍는다. 대신 실패 줄({@code schedule run
@@ -236,35 +239,43 @@ public final class LogFlow {
     }
 
     /**
-     * 외부 호출 하나(Redis 명령). 새 로그 객체를 만들지 않고 지금 흐름의 줄로 남는다. 시작은 이 호출을 부른 store 메서드의 진입 줄이고, 끝나면 결과 줄
-     * 하나를 남긴다: 성공은 {@code <target> call completed}(걸린 시간, 응답 상태), 상대의 5xx는 같은 문구의 warn과 error.type,
-     * {@link #fail}이나 예외는 {@code <target> call failed}(warn, error.type, 예외면 메시지 없는 스택). 예외는 그대로 다시
-     * 던진다.
+     * 외부 호출 하나(Redis 명령). 새 로그 객체를 만들지 않고 지금 흐름의 줄로 남는다. 호출을 감싸는 span({@code <target> call})을 열고 그
+     * 안에서 할 일을 한다. 시작은 이 호출을 부른 store 메서드의 진입 줄이고, 끝나면 그 span 안에서 결과 줄 하나를 남긴다: 성공은 {@code <target>
+     * call completed}(걸린 시간, 응답 상태), 상대의 5xx는 같은 문구의 warn과 error.type, {@link #fail}이나 예외는 {@code
+     * <target> call failed}(warn, error.type, 예외면 메시지 없는 스택). 예외는 그대로 다시 던진다.
      *
      * @param target 호출 대상(google, redis). 문구에 쓴다
      * @return 호출이 돌려준 값
      */
     public static <T, E extends Exception> T call(String target, Call<T, E> body) throws E {
         LogFlow flow = new LogFlow(AppLogger.callerOf(LogFlow.class));
-        try {
+        // 호출을 감싸는 span(LOG_SCHEMA.md 7절 "외부 호출"). 계측이 여는 CLIENT span(Google HTTP, Redis 명령)이 이
+        // span의 자식이 되고,
+        // 결과 줄을 이 span 안에서 찍어 결과 줄의 span.id가 이 span이 된다. 그래서 줄 하나로 APM의 그 호출을 바로 찾는다
+        Span span = TraceContext.tracer().spanBuilder(target + " call").startSpan();
+        try (Scope ignored = span.makeCurrent()) {
             T value;
             try {
                 value = body.run(flow);
             } catch (Throwable failure) {
                 flow.end(Severity.WARN, target + " call failed", failure, true);
+                failed(span, failure);
                 throw failure;
             }
             if (flow.failureType != null) {
                 flow.end(Severity.WARN, target + " call failed", null, false);
+                span.setStatus(StatusCode.ERROR, flow.failureType);
             } else if (flow.status != null && flow.status >= 500) {
                 flow.failureType = UPSTREAM_SERVER_ERROR;
                 flow.end(Severity.WARN, target + " call completed", null, false);
+                span.setStatus(StatusCode.ERROR, UPSTREAM_SERVER_ERROR);
             } else {
                 flow.end(Severity.INFO, target + " call completed", null, false);
             }
             return value;
         } finally {
             flow.closeBindings();
+            span.end();
         }
     }
 
@@ -286,9 +297,10 @@ public final class LogFlow {
     }
 
     /**
-     * 흐름 안·밖의 별도 작업. 새 로그 객체를 만들지 않고 지금 흐름의 줄로 남는다. 시작 줄({@code <name> start}, 시작할 때 아는 값)을 남기고 할
-     * 일을 한 뒤 종료 줄({@code <name> completed}, 결과 값·걸린 시간)을 남긴다. {@link #fail}로 알린 실패는 {@code <name>
-     * failed}(warn), 예외는 {@code <name> failed}(error, 메시지 없는 스택)이고 예외는 그대로 다시 던진다.
+     * 흐름 안·밖의 별도 작업. 새 로그 객체를 만들지 않고 지금 흐름의 줄로 남는다. 작업의 span({@code <name>})을 열고, 그 안에서 시작 줄({@code
+     * <name> start}, 시작할 때 아는 값)을 남기고 할 일을 한 뒤 종료 줄({@code <name> completed}, 결과 값·걸린 시간)을 남긴다.
+     * {@link #fail}로 알린 실패는 {@code <name> failed}(warn), 예외는 {@code <name> failed}(error, 메시지 없는
+     * 스택)이고 예외는 그대로 다시 던진다.
      *
      * @param name 작업 이름(문구에 쓴다)
      * @param start 시작할 때 아는 값
@@ -296,18 +308,27 @@ public final class LogFlow {
     public static <E extends Exception> void task(String name, Body<E> body, LogField... start)
             throws E {
         LogFlow flow = new LogFlow(AppLogger.callerOf(LogFlow.class));
-        try {
+        // 작업 하나의 span(LOG_SCHEMA.md 7절 "별도 작업"). 시작·종료 줄과 작업 안의 호출 span이 이 span 아래에 남는다.
+        // 흐름 밖에서 시작한 작업이면 이 span이 root다
+        Span span = TraceContext.tracer().spanBuilder(name).startSpan();
+        try (Scope ignored = span.makeCurrent()) {
             AppLogger.current().infoAt(flow.origin, name + " start", start);
             try {
                 body.run(flow);
             } catch (Throwable failure) {
                 flow.end(Severity.ERROR, name + " failed", failure, true);
+                failed(span, failure);
                 throw failure;
             }
-            if (flow.failureType != null) flow.end(Severity.WARN, name + " failed", null, false);
-            else flow.end(Severity.INFO, name + " completed", null, false);
+            if (flow.failureType != null) {
+                flow.end(Severity.WARN, name + " failed", null, false);
+                span.setStatus(StatusCode.ERROR, flow.failureType);
+            } else {
+                flow.end(Severity.INFO, name + " completed", null, false);
+            }
         } finally {
             flow.closeBindings();
+            span.end();
         }
     }
 
@@ -357,6 +378,15 @@ public final class LogFlow {
             case WARN -> logger.warnAt(origin, message, all);
             case ERROR -> logger.errorAt(origin, message, all);
         }
+    }
+
+    /**
+     * 우리 span을 예외로 끝난 실패로 표시한다. span에는 예외 종류만 남는다(예외 event의 메시지와 스택은 collector가 지운다. 스택은 같은
+     * span.id의 실패 줄 error.stack_trace로 본다).
+     */
+    private static void failed(Span span, Throwable failure) {
+        span.setStatus(StatusCode.ERROR, failure.getClass().getName());
+        span.recordException(failure);
     }
 
     /** {@link #with}가 연 바인딩을 연 반대 순서로 닫는다. */

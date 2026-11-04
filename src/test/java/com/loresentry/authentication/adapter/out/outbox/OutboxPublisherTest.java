@@ -5,6 +5,9 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.loresentry.authentication.adapter.out.outbox.Round.Outcome;
 import com.loresentry.authentication.support.KafkaTestSupport;
+import io.opentelemetry.api.trace.Span;
+import io.opentelemetry.context.Scope;
+import io.opentelemetry.sdk.trace.SdkTracerProvider;
 import java.nio.charset.StandardCharsets;
 import java.sql.Connection;
 import java.sql.Statement;
@@ -214,6 +217,51 @@ class OutboxPublisherTest extends KafkaTestSupport {
         assertThat(published.at("/loresentry/kafka/topic").asString())
                 .isEqualTo(USER_DELETED_TOPIC);
         assertThat(published.at("/log/layer").asString()).isEqualTo("publisher");
+    }
+
+    /**
+     * 보낸 레코드의 traceparent 는 relay 회차가 아니라 그 행을 만든 요청의 trace 를 잇는다. 발행 계측(운영에서는 EDOT agent, 테스트에서는
+     * AgentLikeTracing)은 보내는 순간의 지금 문맥으로 헤더를 넣으므로, 행의 범위 안에서 보내야 한다(LOG_SCHEMA.md 7절 "Kafka 발행").
+     * 회차 span(운영에서는 agent 의 Spring Scheduling 계측이 연다)을 지금 문맥으로 둔 채 불러, 범위 밖에서 보냈다면 회차의 trace 가 실렸을
+     * 상황을 만든다. 헤더는 하나뿐이다.
+     */
+    @Test
+    void theSentRecordContinuesTheTraceOfTheRequestThatWroteTheRow() {
+        UUID userId = UUID.randomUUID();
+        String trace = "5bf92f3577b34da6a3ce929d0e0e4736";
+        jdbcClient
+                .sql(
+                        """
+                        insert into outbox_events (event_type, event_key, aggregate_id, payload, traceparent)
+                        values ('UserDeleted', :key, :aggregate, :payload::jsonb, :traceparent)
+                        """)
+                .param("key", userId.toString())
+                .param("aggregate", userId)
+                .param("payload", "{\"user_id\":\"" + userId + "\"}")
+                .param("traceparent", "00-" + trace + "-00f067aa0ba902b7-01")
+                .update();
+
+        Span round =
+                SdkTracerProvider.builder()
+                        .build()
+                        .get("test")
+                        .spanBuilder("OutboxRelay.run")
+                        .startSpan();
+        try (Scope ignored = round.makeCurrent()) {
+            assertThat(publisher.publishBatch().outcome()).isEqualTo(Outcome.MORE);
+        } finally {
+            round.end();
+        }
+
+        ConsumerRecord<String, String> record =
+                awaitRecords(USER_DELETED_TOPIC, userId.toString(), 1).getFirst();
+        assertThat(record.headers().headers("traceparent")).hasSize(1);
+        String header =
+                new String(
+                        record.headers().lastHeader("traceparent").value(), StandardCharsets.UTF_8);
+        assertThat(header)
+                .startsWith("00-" + trace + "-")
+                .doesNotContain(round.getSpanContext().getTraceId());
     }
 
     /** 한 번 보낸 행은 다시 고르지 않는다. 두 번째 회차는 보낼 것이 없고, 발행 시각도 처음 그대로다. */

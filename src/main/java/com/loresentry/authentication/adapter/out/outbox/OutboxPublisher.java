@@ -7,6 +7,7 @@ import com.loresentry.authentication.logging.LogField;
 import com.loresentry.authentication.logging.SkipEntryLog;
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.TreeMap;
@@ -126,7 +127,32 @@ class OutboxPublisher {
         List<Failure> failures = new ArrayList<>();
         // 곧바로 다음 회차를 돌리면 안 되는 일이 있었는가. 다시 보내야 할 실패와 종료 신호가 해당한다.
         boolean failed = false;
+        // 행마다 범위 하나(행 id → 범위). 보내기 전에 열어, 보내기·결과 줄·실패 기록을 모두 그 범위 안에서 한다. 그 행을 만든 요청의
+        // trace(행에 저장된 traceparent)를 잇는 범위라, 보내는 순간 Kafka 계측이 그 trace 로 traceparent 헤더를 넣고 그 행의 줄도
+        // 그 trace 로 남는다(LOG_SCHEMA.md 7절 "저장했다 나중에 처리"). 범위 밖에서 보내면 relay 회차의 trace 가 헤더에 실린다.
+        // 이 회차가 끝날 때(finally) 모두 닫는다.
+        Map<UUID, LogScope> rowScopes = new HashMap<>();
+        try {
+            return publish(batch, inFlight, failures, rowScopes, failed);
+        } finally {
+            rowScopes.values().forEach(LogScope::close);
+        }
+    }
+
+    /**
+     * {@link #publishBatch()}의 3~6번. 행마다 범위({@code rowScopes})를 열고 그 안에서 보내고 기록한다. 범위는 부르는 쪽이 닫는다.
+     *
+     * @param failed 3번 앞에서 이미 다음 회차를 미뤄야 할 일이 있었는지
+     */
+    private Round publish(
+            List<OutboxEvent> batch,
+            List<Sent> inFlight,
+            List<Failure> failures,
+            Map<UUID, LogScope> rowScopes,
+            boolean failed) {
         for (OutboxEvent event : batch) {
+            LogScope row = rowScope(event);
+            rowScopes.put(event.id(), row);
             ProducerRecord<String, String> record;
             try {
                 // 행을 topic, key, header, value 를 갖춘 Kafka 레코드로 바꾼다.
@@ -139,8 +165,9 @@ class OutboxPublisher {
             }
             try {
                 // send() 는 전송을 맡기고 곧바로 돌아오며, 돌려받은 CompletableFuture 가 나중에 성공이나 실패를
-                // 알려 준다.
-                inFlight.add(new Sent(event, kafkaTemplate.send(record)));
+                // 알려 준다. 그 행의 범위 안에서 보내야 헤더가 그 행을 만든 요청의 trace 를 잇는다.
+                ProducerRecord<String, String> toSend = record;
+                inFlight.add(new Sent(event, row.call(() -> kafkaTemplate.send(toSend))));
             } catch (RuntimeException failure) {
                 // send() 가 그 자리에서 던졌다. broker 에 닿지 못한 경우다. 행의 문제가 아니므로 뒤의 행도 같은
                 // 이유로 실패할 것이다. 여기서 멈춘다 — 계속하면 행마다 max.block.ms 씩 멈추고, 일부만 나가면
@@ -160,7 +187,7 @@ class OutboxPublisher {
                 SendResult<String, String> result =
                         sent.result().get(SEND_WAIT.toMillis(), TimeUnit.MILLISECONDS);
                 published.add(sent.event().id());
-                logPublished(sent.event(), result);
+                logPublished(rowScopes.get(sent.event().id()), result);
             } catch (InterruptedException interrupted) {
                 // 종료 신호다. 발행 실패가 아니므로 남은 행은 기록 없이 미발행으로 두고 더 기다리지 않는다.
                 // 흔한 관용구와 달리 interrupt 표시를 다시 켜지 않는다. 표시가 켜진 채로는 virtual thread 에서
@@ -199,36 +226,46 @@ class OutboxPublisher {
             String error = failure.cause().toString();
             // 로그에 남길 이유. 예외 메시지는 로그에 적지 않으므로 클래스 이름만 쓴다.
             String reason = failure.cause().getClass().getName();
-            // 그 행의 줄(저장소의 기록 줄 포함)은 모두 그 행을 만든 요청의 trace 와 이벤트 필드로 남긴다
-            try (var row = rowScope(failure.event())) {
-                if (failure.quarantine()) {
-                    quarantined++;
-                    repository.quarantine(id, error);
-                    // 이 문구로 격리를 찾는다. 행의 id·종류·대상은 범위가 붙이고, 예외는 종류와 메시지 없는 스택만 적는다 — payload 와
-                    // 예외 메시지는 적지 않는다.
-                    AppLogger.current()
-                            .error(
-                                    "outbox event quarantined",
-                                    LogField.errorType(reason),
-                                    LogField.safeStackTrace(failure.cause()));
-                } else {
-                    retrying++;
-                    failed = true;
-                    int attempts = repository.markFailed(id, error);
-                    if (attempts == 1) {
-                        // 그 행의 첫 실패만 행마다 한 줄 남긴다. 요청의 흐름 끝에서 이벤트가 나가지 못한 것이 보인다. 다시
-                        // 실패한 행은 WARN_AFTER_ATTEMPTS 번째부터 아래 still failing 줄로 센다.
-                        AppLogger.current()
-                                .warn(
-                                        "outbox event send failed",
-                                        LogField.errorType(reason),
-                                        LogField.safeStackTrace(failure.cause()),
-                                        LogField.result("attempts", attempts));
-                    }
-                    if (attempts >= WARN_AFTER_ATTEMPTS) {
-                        // 이 이유의 개수를 1 올린다. 처음 나온 이유면 1 로 시작한다.
-                        stuck.merge(reason, 1, Integer::sum);
-                    }
+            // 그 행의 줄(저장소의 기록 줄 포함)은 모두 그 행의 범위 안에서 남긴다. 그 행을 만든 요청의 trace 와 이벤트 필드가 붙는다
+            LogScope row = rowScopes.get(id);
+            // 이 행은 나가지 못했다. 그 행의 span 을 실패로 표시한다(이유는 로그의 error.type 과 같다)
+            row.fail(reason);
+            if (failure.quarantine()) {
+                quarantined++;
+                row.run(
+                        () -> {
+                            repository.quarantine(id, error);
+                            // 이 문구로 격리를 찾는다. 행의 id·종류·대상은 범위가 붙이고, 예외는 종류와 메시지 없는 스택만 적는다 —
+                            // payload 와 예외 메시지는 적지 않는다.
+                            AppLogger.current()
+                                    .error(
+                                            "outbox event quarantined",
+                                            LogField.errorType(reason),
+                                            LogField.safeStackTrace(failure.cause()));
+                        });
+            } else {
+                retrying++;
+                failed = true;
+                int attempts =
+                        row.call(
+                                () -> {
+                                    int count = repository.markFailed(id, error);
+                                    if (count == 1) {
+                                        // 그 행의 첫 실패만 행마다 한 줄 남긴다. 요청의 흐름 끝에서 이벤트가 나가지 못한 것이
+                                        // 보인다. 다시 실패한 행은 WARN_AFTER_ATTEMPTS 번째부터 아래 still failing
+                                        // 줄로 센다.
+                                        AppLogger.current()
+                                                .warn(
+                                                        "outbox event send failed",
+                                                        LogField.errorType(reason),
+                                                        LogField.safeStackTrace(failure.cause()),
+                                                        LogField.result("attempts", count));
+                                    }
+                                    return count;
+                                });
+                if (attempts >= WARN_AFTER_ATTEMPTS) {
+                    // 이 이유의 개수를 1 올린다. 처음 나온 이유면 1 로 시작한다.
+                    stuck.merge(reason, 1, Integer::sum);
                 }
             }
         }
@@ -249,10 +286,11 @@ class OutboxPublisher {
     }
 
     /**
-     * 행 하나의 줄(발행, 실패 기록, 격리)을 남기는 범위. 그 행을 만든 요청의 trace(행에 저장된 traceparent)로 남겨, 요청의 흐름 끝에 이 이벤트가
-     * 어떻게 됐는지 보이게 한다(LOG_SCHEMA.md 7절 outbox). traceparent 가 없는 행(추적 전에 쌓인 행)은 relay 회차의 trace 다.
-     * 행의 모든 줄에 relay 작업 이름과 이벤트의 ID·종류·대상(ce_id·ce_type·ce_subject)이 붙는다. 받는 서비스의 inbox 줄과 같은
-     * cloudevent 필드라, 이벤트 ID 하나로 보낸 줄과 받은 줄을 함께 찾는다.
+     * 행 하나의 범위. 그 행을 만든 요청의 trace(행에 저장된 traceparent)를 잇는다. 그 안에서 보내면 Kafka 계측이 그 trace 로 헤더를 넣고, 그
+     * 안에서 남긴 줄(발행, 실패 기록, 격리)은 요청의 흐름 끝에 이 이벤트가 어떻게 됐는지 보여 준다(LOG_SCHEMA.md 7절 outbox). traceparent
+     * 가 없는 행(추적 전에 쌓인 행)은 그 행만 새 trace 다. 행의 모든 줄에 relay 작업 이름과 이벤트의 ID·종류·대상
+     * (ce_id·ce_type·ce_subject)이 붙는다. 받는 서비스의 inbox 줄과 같은 cloudevent 필드라, 이벤트 ID 하나로 보낸 줄과 받은 줄을
+     * 함께 찾는다.
      */
     private static LogScope rowScope(OutboxEvent event) {
         LogScope row =
@@ -265,20 +303,26 @@ class OutboxPublisher {
         // UserDeleted 의 대상(ce_subject)은 탈퇴한 사용자다. 그 행의 줄(발행, 실패 기록)에 그 사용자를 user.id 로도 붙인다.
         // 계약에 없는 종류(격리할 행)는 대상이 사용자인지 알 수 없어 붙이지 않는다
         if ("UserDeleted".equals(event.eventType()))
-            AppLogger.current().identify(event.aggregateId());
+            row.run(() -> AppLogger.current().identify(event.aggregateId()));
         return row;
     }
 
-    /** 보낸 행 하나의 줄. 이 이벤트가 언제 어느 topic·offset 으로 나갔는지 남긴다. */
-    private static void logPublished(OutboxEvent event, SendResult<String, String> result) {
-        try (var row = rowScope(event)) {
-            var metadata = result == null ? null : result.getRecordMetadata();
-            AppLogger.current()
-                    .info(
-                            "outbox event published",
-                            metadata == null ? null : LogField.kafkaTopic(metadata.topic()),
-                            metadata == null ? null : LogField.kafkaPartition(metadata.partition()),
-                            metadata == null ? null : LogField.kafkaOffset(metadata.offset()));
-        }
+    /** 보낸 행 하나의 줄. 이 이벤트가 언제 어느 topic·offset 으로 나갔는지 그 행의 범위 안에서 남긴다. */
+    private static void logPublished(LogScope row, SendResult<String, String> result) {
+        var metadata = result == null ? null : result.getRecordMetadata();
+        row.run(
+                () ->
+                        AppLogger.current()
+                                .info(
+                                        "outbox event published",
+                                        metadata == null
+                                                ? null
+                                                : LogField.kafkaTopic(metadata.topic()),
+                                        metadata == null
+                                                ? null
+                                                : LogField.kafkaPartition(metadata.partition()),
+                                        metadata == null
+                                                ? null
+                                                : LogField.kafkaOffset(metadata.offset())));
     }
 }

@@ -11,14 +11,20 @@ import com.loresentry.authentication.logging.LogField;
 import com.loresentry.authentication.logging.LogLayer;
 import com.loresentry.authentication.support.Slf4jLogSinkExtension;
 import io.opentelemetry.api.trace.Span;
+import io.opentelemetry.api.trace.SpanContext;
+import io.opentelemetry.api.trace.SpanKind;
+import io.opentelemetry.api.trace.StatusCode;
 import io.opentelemetry.api.trace.Tracer;
 import io.opentelemetry.context.Scope;
+import io.opentelemetry.sdk.testing.junit5.OpenTelemetryExtension;
 import io.opentelemetry.sdk.trace.ReadableSpan;
 import io.opentelemetry.sdk.trace.SdkTracerProvider;
+import io.opentelemetry.sdk.trace.data.SpanData;
 import jakarta.servlet.ServletException;
 import java.io.IOException;
 import java.net.URI;
 import java.util.HashMap;
+import java.util.IdentityHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -26,6 +32,7 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.junit.jupiter.api.extension.RegisterExtension;
 import org.slf4j.LoggerFactory;
 import org.slf4j.MDC;
 
@@ -41,10 +48,20 @@ import org.slf4j.MDC;
  *   <li>시작·종료 줄의 위치는 흐름을 연 메서드다(log.layer·log.origin.function)
  *   <li>요청 흐름은 응답 상태로 레벨을 정하고, 처리되지 않은 예외(java.lang.Error 포함)에도 종료 줄을 남긴다
  *   <li>진행 중에 알게 된 사용자(identify)가 이후 줄과 종료 줄에 붙는다
+ *   <li>외부 호출·작업·outbox 행은 로깅 팩토리가 span을 열고, 그 흐름의 줄이 그 span 안에서 찍힌다(LOG_SCHEMA.md 7절)
  * </ul>
  */
 @ExtendWith(Slf4jLogSinkExtension.class)
 class LogFlowTest {
+    /**
+     * 로깅 팩토리가 여는 span을 받는 OpenTelemetry SDK. 운영에서는 agent의 SDK가 받는다. 이 테스트 클래스 동안
+     * GlobalOpenTelemetry가 되고, 테스트마다 받은 span을 비운다.
+     */
+    @RegisterExtension static final OpenTelemetryExtension OTEL = OpenTelemetryExtension.create();
+
+    /** 줄을 찍은 순간의 지금 span. formatter는 줄을 쓰는 순간 이 span으로 trace.id·span.id를 채운다. */
+    private final Map<ILoggingEvent, SpanContext> spanAtLine = new IdentityHashMap<>();
+
     /** 테스트를 도는 스레드. 같은 JVM의 다른 테스트가 띄운 앱(Kafka client 등)이 다른 스레드에서 찍는 줄은 모으지 않는다. */
     private Thread testThread;
 
@@ -55,6 +72,7 @@ class LogFlowTest {
                     if (Thread.currentThread() != testThread) return;
                     // 줄을 찍은 순간의 MDC를 담아 둔다(Logback은 MDC를 처음 읽을 때 복사하므로, 나중에 읽으면 그때의 MDC가 나온다)
                     event.prepareForDeferredProcessing();
+                    spanAtLine.put(event, Span.current().getSpanContext());
                     super.append(event);
                 }
             };
@@ -451,16 +469,16 @@ class LogFlowTest {
     void anOutboxRowScopeCarriesTheRowTraceEventFieldsAndItsOwnUser() {
         UUID id = UUID.randomUUID();
         UUID user = UUID.randomUUID();
-        try (var row =
+        LogScope row =
                 LogScope.outboxEvent(
                         "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01",
                         "outbox-relay",
                         id,
                         "UserDeleted",
-                        user)) {
-            AppLogger.current().identify(user);
-            AppLogger.current().info("outbox event published");
-        }
+                        user);
+        row.run(() -> AppLogger.current().identify(user));
+        row.run(() -> AppLogger.current().info("outbox event published"));
+        row.close();
         ILoggingEvent published = line("outbox event published");
         assertThat(published.getMDCPropertyMap())
                 .containsEntry("trace.id", "0af7651916cd43dd8448eb211c80319c")
@@ -477,13 +495,131 @@ class LogFlowTest {
     }
 
     @Test
-    void aStoredTraceparentBecomesTheTraceOfTheLine() {
-        // outbox 행에 저장해 둔 traceparent로 원래 흐름의 trace를 잇는다(LOG_SCHEMA.md 7절)
-        AppLogger stored =
-                TraceContext.fromTraceparent(
-                        "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01");
-        assertThat(stored.traceId()).isEqualTo("0af7651916cd43dd8448eb211c80319c");
-        assertThat(TraceContext.fromTraceparent("not-a-traceparent").traceId()).isNull();
-        assertThat(TraceContext.fromTraceparent(null).traceId()).isNull();
+    void anOutboxRowContinuesTheStoredTraceInItsOwnSpan() {
+        // outbox 행에 저장해 둔 traceparent를 부모로 행의 span을 연다. 행의 줄은 그 span 안에서 찍히고, relay 회차와 다른 trace라
+        // 회차 span을 link로 남긴다(LOG_SCHEMA.md 7절 "저장했다 나중에 처리")
+        Span round =
+                OTEL.getOpenTelemetry()
+                        .getTracer("test")
+                        .spanBuilder("OutboxRelay.run")
+                        .startSpan();
+        try (Scope ignored = round.makeCurrent()) {
+            LogScope row =
+                    LogScope.outboxEvent(
+                            "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01",
+                            "outbox-relay",
+                            UUID.randomUUID(),
+                            "UserDeleted",
+                            UUID.randomUUID());
+            row.run(() -> AppLogger.current().info("outbox event published"));
+            row.close();
+        } finally {
+            round.end();
+        }
+        SpanData span = span("outbox UserDeleted");
+        assertThat(span.getTraceId()).isEqualTo("0af7651916cd43dd8448eb211c80319c");
+        assertThat(span.getParentSpanId()).isEqualTo("b7ad6b7169203331");
+        assertThat(span.getKind()).isEqualTo(SpanKind.INTERNAL);
+        assertThat(span.getLinks())
+                .extracting(link -> link.getSpanContext().getSpanId())
+                .containsExactly(round.getSpanContext().getSpanId());
+        assertThat(span.getInstrumentationScopeInfo().getName())
+                .isEqualTo(TraceContext.INSTRUMENTATION_SCOPE);
+        // 그 행의 줄은 행의 span이 지금 span일 때 찍혔다
+        assertThat(spanAtLine.get(line("outbox event published")).getSpanId())
+                .isEqualTo(span.getSpanId());
+    }
+
+    @Test
+    void anOutboxRowWithoutAStoredTraceStartsItsOwnTrace() {
+        // 추적을 붙이기 전에 쌓인 행(값 없음)이나 형식이 틀린 값은 그 행만 새 trace로 시작한다. relay 회차의 trace를 빌려 쓰지 않는다
+        Span round =
+                OTEL.getOpenTelemetry()
+                        .getTracer("test")
+                        .spanBuilder("OutboxRelay.run")
+                        .startSpan();
+        try (Scope ignored = round.makeCurrent()) {
+            for (String stored : new String[] {null, "not-a-traceparent"}) {
+                LogScope.outboxEvent(stored, "outbox-relay", UUID.randomUUID(), "UserDeleted", null)
+                        .close();
+            }
+        } finally {
+            round.end();
+        }
+        assertThat(OTEL.getSpans())
+                .filteredOn(s -> s.getName().equals("outbox UserDeleted"))
+                .hasSize(2)
+                .allSatisfy(
+                        s -> {
+                            assertThat(s.getParentSpanContext().isValid()).isFalse();
+                            assertThat(s.getTraceId())
+                                    .isNotEqualTo(round.getSpanContext().getTraceId());
+                        });
+    }
+
+    @Test
+    void aCallOpensASpanAndWritesItsResultLineInsideIt() {
+        // 외부 호출 결과 줄의 span.id가 호출을 감싸는 span이다. 계측의 CLIENT span은 그 자식이 된다(LOG_SCHEMA.md 7절 "외부 호출")
+        String[] inside = new String[1];
+        LogFlow.call(
+                "google",
+                URI.create("https://oauth2.googleapis.com/token"),
+                flow -> {
+                    inside[0] = Span.current().getSpanContext().getSpanId();
+                    return flow.status(200);
+                });
+        SpanData call = span("google call");
+        assertThat(inside[0]).isEqualTo(call.getSpanId());
+        assertThat(call.getStatus().getStatusCode()).isEqualTo(StatusCode.UNSET);
+        assertThat(spanAtLine.get(line("google call completed")).getSpanId())
+                .isEqualTo(call.getSpanId());
+    }
+
+    @Test
+    void aFailedCallMarksItsSpan() {
+        LogFlow.call("redis", flow -> flow.status(503));
+        assertThatThrownBy(
+                        () ->
+                                LogFlow.call(
+                                        "google",
+                                        flow -> {
+                                            throw new IOException(
+                                                    "token endpoint said code=secret");
+                                        }))
+                .isInstanceOf(IOException.class);
+
+        assertThat(span("redis call").getStatus().getStatusCode()).isEqualTo(StatusCode.ERROR);
+        SpanData google = span("google call");
+        assertThat(google.getStatus().getStatusCode()).isEqualTo(StatusCode.ERROR);
+        assertThat(google.getStatus().getDescription()).isEqualTo("java.io.IOException");
+        assertThat(spanAtLine.get(line("google call failed")).getSpanId())
+                .isEqualTo(google.getSpanId());
+    }
+
+    @Test
+    void aTaskOpensItsOwnSpan() {
+        LogFlow.task("sample cleanup", task -> AppLogger.current().info("sample step"));
+        assertThatThrownBy(
+                        () ->
+                                LogFlow.task(
+                                        "sample warm-up",
+                                        task -> {
+                                            throw new IllegalStateException("boom");
+                                        }))
+                .isInstanceOf(IllegalStateException.class);
+
+        SpanData cleanup = span("sample cleanup");
+        assertThat(spanAtLine.get(line("sample step")).getSpanId()).isEqualTo(cleanup.getSpanId());
+        assertThat(spanAtLine.get(line("sample cleanup completed")).getSpanId())
+                .isEqualTo(cleanup.getSpanId());
+        assertThat(span("sample warm-up").getStatus().getStatusCode()).isEqualTo(StatusCode.ERROR);
+    }
+
+    /** 이 테스트에서 끝난 span 가운데 그 이름의 것. */
+    private static SpanData span(String name) {
+        return OTEL.getSpans().stream()
+                .filter(s -> s.getName().equals(name))
+                .findFirst()
+                .orElseThrow(() -> new AssertionError("no span named " + name));
     }
 }

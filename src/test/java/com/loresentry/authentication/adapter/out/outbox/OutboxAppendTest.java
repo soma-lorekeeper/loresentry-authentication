@@ -4,8 +4,10 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.loresentry.authentication.support.DatabaseTestSupport;
-import io.micrometer.tracing.Span;
-import io.micrometer.tracing.Tracer;
+import io.opentelemetry.api.trace.Span;
+import io.opentelemetry.api.trace.Tracer;
+import io.opentelemetry.context.Scope;
+import io.opentelemetry.sdk.trace.SdkTracerProvider;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -33,7 +35,8 @@ class OutboxAppendTest extends DatabaseTestSupport {
     /** 넣은 행을 확인할 때 쓴다. */
     @Autowired JdbcClient jdbcClient;
 
-    @Autowired Tracer tracer;
+    /** 요청의 서버 span 흉내(운영에서는 agent가 연다). 내보내는 곳이 없는 SDK tracer다. */
+    private final Tracer tracer = SdkTracerProvider.builder().build().get("test");
 
     /** 저장된 payload 를 글자가 아니라 내용으로 비교하려고 JSON 으로 읽는 도구. */
     private final JsonMapper json = JsonMapper.builder().build();
@@ -105,8 +108,8 @@ class OutboxAppendTest extends DatabaseTestSupport {
     @Test
     void storesTheTraceparentOfTheCurrentSpan() {
         UUID traced = UUID.randomUUID();
-        Span span = tracer.nextSpan().name("account delete").start();
-        try (Tracer.SpanInScope scope = tracer.withSpan(span)) {
+        Span span = tracer.spanBuilder("account delete").startSpan();
+        try (Scope scope = span.makeCurrent()) {
             transaction.executeWithoutResult(
                     status ->
                             outbox.append(
@@ -130,7 +133,12 @@ class OutboxAppendTest extends DatabaseTestSupport {
 
         // flags(마지막 두 글자)는 sampled 외에 random 비트가 켜질 수 있어 앞부분만 본다
         assertThat(traceparent(traced))
-                .startsWith("00-" + span.context().traceId() + "-" + span.context().spanId() + "-")
+                .startsWith(
+                        "00-"
+                                + span.getSpanContext().getTraceId()
+                                + "-"
+                                + span.getSpanContext().getSpanId()
+                                + "-")
                 .hasSize(55);
         assertThat(traceparent(untraced)).isNull();
     }
