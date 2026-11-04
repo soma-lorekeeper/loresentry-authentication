@@ -10,6 +10,11 @@ import com.loresentry.authentication.logging.AppLogger;
 import com.loresentry.authentication.logging.LogField;
 import com.loresentry.authentication.logging.LogLayer;
 import com.loresentry.authentication.support.Slf4jLogSinkExtension;
+import io.opentelemetry.api.trace.Span;
+import io.opentelemetry.api.trace.Tracer;
+import io.opentelemetry.context.Scope;
+import io.opentelemetry.sdk.trace.ReadableSpan;
+import io.opentelemetry.sdk.trace.SdkTracerProvider;
 import jakarta.servlet.ServletException;
 import java.io.IOException;
 import java.net.URI;
@@ -188,6 +193,46 @@ class LogFlowTest {
         assertThat(pairs(line("schedule run completed")))
                 .containsEntry("loresentry.result.published", 2)
                 .containsEntry("loresentry.schedule.name", "sample-relay");
+    }
+
+    @Test
+    void onlyAnIdlePollingRoundMarksItsSpanForTheCollectorToDrop() {
+        // Spring이 @Scheduled 실행마다 여는 span 흉내. 빈 회차의 span에만 표시가 붙고, 일이 있던 회차와 실패한 회차는 그대로 남는다
+        Tracer tracer = SdkTracerProvider.builder().build().get("test");
+
+        ReadableSpan idle =
+                inSpan(
+                        tracer,
+                        () ->
+                                LogFlow.polling(
+                                        "sample-relay",
+                                        run -> run.result(LogField.result("published", 0))));
+        ReadableSpan busy =
+                inSpan(
+                        tracer,
+                        () ->
+                                LogFlow.polling(
+                                        "sample-relay",
+                                        run -> AppLogger.current().info("sample batch start")));
+        ReadableSpan failed =
+                inSpan(
+                        tracer,
+                        () -> LogFlow.polling("sample-relay", run -> run.fail("SAMPLE_FAILED")));
+
+        assertThat(idle.getAttribute(TraceContext.IDLE_POLLING)).isTrue();
+        assertThat(busy.getAttribute(TraceContext.IDLE_POLLING)).isNull();
+        assertThat(failed.getAttribute(TraceContext.IDLE_POLLING)).isNull();
+    }
+
+    /** span을 지금 span으로 두고 할 일을 한 뒤 닫는다. 닫힌 span의 속성을 읽으려고 SDK의 ReadableSpan으로 돌려준다. */
+    private static ReadableSpan inSpan(Tracer tracer, Runnable work) {
+        Span span = tracer.spanBuilder("scheduled run").startSpan();
+        try (Scope ignored = span.makeCurrent()) {
+            work.run();
+        } finally {
+            span.end();
+        }
+        return (ReadableSpan) span;
     }
 
     @Test

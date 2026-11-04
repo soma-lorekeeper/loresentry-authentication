@@ -2,6 +2,7 @@ package com.loresentry.authentication.adapter.out.logging;
 
 import com.loresentry.authentication.logging.AppLogger;
 import com.loresentry.authentication.logging.LogField;
+import io.opentelemetry.api.common.AttributeKey;
 import io.opentelemetry.api.trace.Span;
 import io.opentelemetry.api.trace.SpanContext;
 import java.util.UUID;
@@ -28,7 +29,23 @@ public final class TraceContext {
     /** 헬스체크 요청의 tags 값. 그 요청의 모든 줄에 붙고, Logstash가 정상(info) 줄을 버린다. */
     private static final String HEALTH_TAG = "health";
 
+    /**
+     * 할 일이 없던 폴링 회차의 span 표시. EDOT Collector가 이 속성이 true인 span을 APM에 쓰기 전에 버린다 (gitops {@code
+     * logging/base/otel-collector/otel.yml}의 filter, LOG_SCHEMA.md 7절).
+     */
+    static final AttributeKey<Boolean> IDLE_POLLING =
+            AttributeKey.booleanKey("loresentry.polling.idle");
+
     private TraceContext() {}
+
+    /**
+     * 지금 span에 빈 폴링 회차 표시를 단다. 폴링 회차의 span은 우리 코드가 아니라 Spring이 {@code @Scheduled} 실행마다 연다. 그래서 빈
+     * 회차에도 span이 생기는데, 끄면 할 일이 있던 회차의 로그도 trace를 잃는다. 대신 빈 회차임을 표시해 collector가 버리게 한다. 빈 회차는 줄도 하위
+     * span도 없어 버려도 끊기는 것이 없다. span이 없으면 아무것도 하지 않는다.
+     */
+    static void markIdlePolling() {
+        Span.current().setAttribute(IDLE_POLLING, true);
+    }
 
     /** 지금 span의 ID로 시작점의 로그 객체를 만든다. span이 없으면 trace 없는 객체다. */
     static AppLogger newLogger() {
