@@ -4,6 +4,11 @@ spring:
   threads:
     virtual:
       enabled: true
+  mvc:
+    servlet:
+      # DispatcherServlet을 첫 요청이 아니라 기동할 때 준비한다. 첫 요청(보통 kubelet 헬스체크)이 그 준비 비용을 치르지 않고, 준비 줄
+      # ("Initializing Servlet ...")이 헬스체크 trace(collector가 버린다)에 붙어 APM에 없는 span을 가리키지 않는다
+      load-on-startup: 1
   jpa:
     open-in-view: false
     hibernate:

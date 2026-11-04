@@ -248,11 +248,13 @@ public final class LogFlow {
      * @return 호출이 돌려준 값
      */
     public static <T, E extends Exception> T call(String target, Call<T, E> body) throws E {
-        LogFlow flow = new LogFlow(AppLogger.callerOf(LogFlow.class));
         // 호출을 감싸는 span(LOG_SCHEMA.md 7절 "외부 호출"). 계측이 여는 CLIENT span(Google HTTP, Redis 명령)이 이
-        // span의 자식이 되고,
-        // 결과 줄을 이 span 안에서 찍어 결과 줄의 span.id가 이 span이 된다. 그래서 줄 하나로 APM의 그 호출을 바로 찾는다
+        // span의
+        // 자식이 되고, 결과 줄을 이 span 안에서 찍어 결과 줄의 span.id가 이 span이 된다. 그래서 줄 하나로 APM의 그 호출을 바로
+        // 찾는다. span을 먼저 열고 흐름 객체(걸린 시간을 재기 시작한다)를 만든다. 반대 순서면 처음 호출에서 tracer를 꺼내는 시간이
+        // 결과 줄의 event.duration에만 들어가 span 길이와 어긋난다
         Span span = TraceContext.tracer().spanBuilder(target + " call").startSpan();
+        LogFlow flow = new LogFlow(AppLogger.callerOf(LogFlow.class));
         try (Scope ignored = span.makeCurrent()) {
             T value;
             try {
@@ -307,10 +309,10 @@ public final class LogFlow {
      */
     public static <E extends Exception> void task(String name, Body<E> body, LogField... start)
             throws E {
-        LogFlow flow = new LogFlow(AppLogger.callerOf(LogFlow.class));
         // 작업 하나의 span(LOG_SCHEMA.md 7절 "별도 작업"). 시작·종료 줄과 작업 안의 호출 span이 이 span 아래에 남는다.
-        // 흐름 밖에서 시작한 작업이면 이 span이 root다
+        // 흐름 밖에서 시작한 작업이면 이 span이 root다. 호출과 같이 span을 먼저 열고 걸린 시간을 재기 시작한다
         Span span = TraceContext.tracer().spanBuilder(name).startSpan();
+        LogFlow flow = new LogFlow(AppLogger.callerOf(LogFlow.class));
         try (Scope ignored = span.makeCurrent()) {
             AppLogger.current().infoAt(flow.origin, name + " start", start);
             try {
