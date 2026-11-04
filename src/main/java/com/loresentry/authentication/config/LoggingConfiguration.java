@@ -24,7 +24,7 @@ import org.springframework.web.servlet.mvc.method.annotation.RequestMappingHandl
  *
  * <ul>
  *   <li>AppLogger의 출력: adapter의 Slf4jLogSink를 bean으로 만들며 AppLogger에 꽂는다(core는 adapter를 모른다).
- *   <li>요청 시작점·접근 로그 필터(HIGHEST_PRECEDENCE + 2). 서버 span을 여는 Spring observation 필터는 +1이고,
+ *   <li>요청 시작점·접근 로그 필터(HIGHEST_PRECEDENCE + 2). 서버 span은 EDOT agent의 Tomcat 계측이 필터보다 먼저 열고,
  *       ErrorBoundaryFilter는 +3이라 이 필터 안쪽에서 돈다.
  *   <li>AppLogger를 context-propagation에 등록한다. 시간 제한용 가상 스레드 실행기(Google, Redis)가 AppLogger와 span을 함께
  *       옮긴다.
@@ -32,7 +32,7 @@ import org.springframework.web.servlet.mvc.method.annotation.RequestMappingHandl
  *   <li>Boot 기본 오류 응답(/error)에도 trace_id를 싣는다.
  * </ul>
  *
- * <p>스케줄 작업 1회의 trace는 Spring의 스케줄 observation이 연다.
+ * <p>스케줄 작업 1회의 trace는 EDOT agent의 Spring Scheduling 계측이 연다.
  */
 @Configuration(proxyBeanMethods = false)
 public class LoggingConfiguration {

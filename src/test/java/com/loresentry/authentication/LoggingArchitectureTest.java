@@ -100,6 +100,22 @@ class LoggingArchitectureTest {
     }
 
     @Test
+    void onlyTheLogSinkUsesTracingLibraries() {
+        // span을 열고, 지금 문맥을 바꾸고, 스레드로 문맥을 옮기는 일은 로깅 팩토리(adapter.out.logging)만 한다. 서비스 코드는 할 일(람다)과
+        // 값만
+        // 넘긴다. traceparent 헤더도 코드가 넣지 않는다(Kafka 발행 계측이 지금 문맥으로 넣는다). LOG_SCHEMA.md 5절 "만들기", 7절
+        noClasses()
+                .that()
+                .resideOutsideOfPackage(ROOT + ".adapter.out.logging..")
+                .should()
+                .dependOnClassesThat()
+                .resideInAnyPackage(
+                        "io.opentelemetry..", "io.micrometer.tracing..", "io.micrometer.context..")
+                .because("추적은 EDOT agent와 로깅 팩토리가 맡는다. 서비스 코드는 추적 API를 모른다")
+                .check(CLASSES);
+    }
+
+    @Test
     void nothingWritesToStandardStreams() {
         noClasses()
                 .should(GeneralCodingRules.ACCESS_STANDARD_STREAMS)

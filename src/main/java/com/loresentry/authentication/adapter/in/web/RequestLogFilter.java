@@ -22,9 +22,9 @@ import org.springframework.web.util.ServletRequestPathUtils;
  * 일, 접근 로그(request received·request completed), 걸린 시간, 응답 상태로 정하는 레벨, 처리되지 않은 예외 줄은 모두 LogFlow가
  * 한다(LOG_SCHEMA.md 5절 "만들기", "접근 로그").
  *
- * <p>순서: Spring observation 필터(HIGHEST_PRECEDENCE + 1)가 gateway가 보낸 traceparent를 이어 서버 span을 연 뒤 이
- * 필터(+2)가 돈다. 그래서 이 요청의 모든 줄이 gateway 줄과 같은 trace.id를 갖는다. {@link ErrorBoundaryFilter}(+3)는 이 필터
- * 안쪽이라, 그 필터가 쓰는 오류 응답도 이 필터의 결과 줄에 남는다.
+ * <p>순서: EDOT agent의 Tomcat 계측이 필터보다 먼저 gateway가 보낸 traceparent를 이어 서버 span을 열고, 이 필터(+2)가 그 안에서
+ * 돈다. 그래서 이 요청의 모든 줄이 gateway 줄과 같은 trace.id를 갖는다. {@link ErrorBoundaryFilter}(+3)는 이 필터 안쪽이라, 그
+ * 필터가 쓰는 오류 응답도 이 필터의 결과 줄에 남는다.
  *
  * <p>꺼내는 값
  *
