@@ -24,7 +24,8 @@ import tools.jackson.databind.json.JsonMapper;
  * <ul>
  *   <li>gateway가 보낸 traceparent를 이어, 이 서비스의 모든 줄이 gateway와 같은 trace ID를 갖는다
  *   <li>에러 본문 trace_id가 그 trace ID다
- *   <li>받은 경로(url.path)와 경로 템플릿(http.route), gateway가 확인한 사용자(X-User-Id)가 모든 줄에 붙는다
+ *   <li>받은 경로(url.path), 경로 템플릿(http.route), 메서드(http.request.method), gateway가 확인한 사용자(X-User-Id)가
+ *       모든 줄에 붙는다
  *   <li>실패 이유(우리 오류 코드)는 따로 찍히지 않고 결과 줄(request completed)의 error.type에 붙는다
  *   <li>헬스체크 흐름의 모든 줄에 tags: health가 붙는다
  * </ul>
@@ -72,6 +73,7 @@ class RequestLoggingTest extends DatabaseTestSupport {
                             assertThat(line.at("/url/path").asString()).isEqualTo("/auth/users/me");
                             assertThat(line.at("/http/route").asString())
                                     .isEqualTo("/auth/users/me");
+                            assertThat(line.at("/http/request/method").asString()).isEqualTo("GET");
                         });
         JsonNode completed =
                 mine.stream()
@@ -113,7 +115,13 @@ class RequestLoggingTest extends DatabaseTestSupport {
                 .extracting(line -> line.get("message").asString())
                 .contains("request received", "request completed");
         assertThat(health)
-                .allSatisfy(line -> assertThat(line.get("tags").toString()).contains("health"));
+                .allSatisfy(
+                        line -> {
+                            assertThat(line.get("tags").toString()).contains("health");
+                            assertThat(line.at("/http/route").asString()).isEqualTo("/health");
+                            assertThat(line.at("/http/request/method").asString()).isEqualTo("GET");
+                            assertThat(line.has("user")).isFalse();
+                        });
     }
 
     @Test

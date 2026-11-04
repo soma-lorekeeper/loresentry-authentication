@@ -1,12 +1,12 @@
 package com.loresentry.authentication.adapter.out.redis;
 
+import com.loresentry.authentication.adapter.out.logging.AppLoggerAccessor;
+import com.loresentry.authentication.adapter.out.logging.LogFlow;
 import com.loresentry.authentication.application.port.out.LoginSessionStore;
 import com.loresentry.authentication.application.port.out.PortFailure;
 import com.loresentry.authentication.domain.SessionId;
 import com.loresentry.authentication.logging.AppLogger;
 import com.loresentry.authentication.logging.LogField;
-import io.micrometer.context.ContextExecutorService;
-import io.micrometer.context.ContextSnapshotFactory;
 import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.nio.charset.StandardCharsets;
@@ -40,12 +40,9 @@ public final class RedisLoginSessionStore implements LoginSessionStore, AutoClos
                     .enable(DeserializationFeature.FAIL_ON_TRAILING_TOKENS)
                     .build();
     private final StringRedisTemplate redis;
-    // 시간 제한을 걸려고 따로 도는 가상 스레드. ContextExecutorService 로 감싸 맡길 때의 AppLogger·span 을 새 스레드로 옮긴다
-    // (LoggingConfiguration 이 AppLogger 접근자를 등록한다). 그래서 그 스레드에서 찍힌 줄도 원래 요청의 trace 를 갖는다.
-    private final ExecutorService commands =
-            ContextExecutorService.wrap(
-                    Executors.newVirtualThreadPerTaskExecutor(),
-                    () -> ContextSnapshotFactory.builder().build().captureAll());
+    // 시간 제한을 걸려고 따로 도는 가상 스레드. 맡길 때의 AppLogger·span 을 새 스레드로 옮기는 실행기라, 그 스레드에서 찍힌
+    // 줄(Redis 호출 결과 줄 포함)도 원래 요청의 trace·user 를 갖는다.
+    private final ExecutorService commands = AppLoggerAccessor.virtualThreadExecutor();
 
     public RedisLoginSessionStore(StringRedisTemplate redis) {
         this.redis = redis;
@@ -117,6 +114,7 @@ public final class RedisLoginSessionStore implements LoginSessionStore, AutoClos
                         AppLogger.current()
                                 .warn(
                                         "login session index unreadable",
+                                        LogField.errorType("INVALID_DATA"),
                                         LogField.result("by_id_revoked", false));
                     }
                     return hash == null
@@ -190,30 +188,27 @@ public final class RedisLoginSessionStore implements LoginSessionStore, AutoClos
     private long execute(Command command) {
         // 0: no write; 1: write may have run; 2: cancelled before writing.
         var gate = new AtomicInteger();
-        var future =
-                commands.submit(
-                        () ->
-                                redis.execute(
-                                        (RedisCallback<Long>)
-                                                connection -> {
-                                                    if (gate.get() == 2)
-                                                        throw failure(
-                                                                PortFailure.Execution.NOT_EXECUTED,
-                                                                false);
-                                                    return command.run(
-                                                            connection,
-                                                            () -> {
-                                                                if (!gate.compareAndSet(0, 1))
-                                                                    throw failure(
-                                                                            PortFailure.Execution
-                                                                                    .NOT_EXECUTED,
-                                                                            false);
-                                                            });
-                                                }));
+        // 한 연결에서 도는 읽기·스크립트. 시간 제한으로 취소된 뒤에는 쓰기를 시작하지 않는다(gate)
+        RedisCallback<Long> callback =
+                connection -> {
+                    if (gate.get() == 2) throw failure(PortFailure.Execution.NOT_EXECUTED, false);
+                    return command.run(
+                            connection,
+                            () -> {
+                                if (!gate.compareAndSet(0, 1))
+                                    throw failure(PortFailure.Execution.NOT_EXECUTED, false);
+                            });
+                };
+        // Redis 명령 하나. 결과 줄(redis call completed·failed, 걸린 시간, 실패면 예외 종류·메시지 없는 스택)은 LogFlow 가 명령을
+        // 실행하는 가상 스레드에서 남긴다
+        var future = commands.submit(() -> LogFlow.call("redis", call -> redis.execute(callback)));
         try {
             Long result = future.get(500, TimeUnit.MILLISECONDS);
             if (result == null) {
-                AppLogger.current().warn("login session script returned no result");
+                AppLogger.current()
+                        .warn(
+                                "login session script returned no result",
+                                LogField.errorType("UNAVAILABLE"));
                 throw failure(PortFailure.Execution.UNKNOWN, false);
             }
             if (result == -2) {
@@ -240,6 +235,8 @@ public final class RedisLoginSessionStore implements LoginSessionStore, AutoClos
             AppLogger.current()
                     .warn(
                             "login session store call timed out",
+                            LogField.errorType(e.getClass().getName()),
+                            LogField.safeStackTrace(e),
                             LogField.param("timeout_millis", 500));
             boolean prevented = gate.compareAndSet(0, 2);
             future.cancel(true);
@@ -247,7 +244,11 @@ public final class RedisLoginSessionStore implements LoginSessionStore, AutoClos
                     prevented ? PortFailure.Execution.NOT_EXECUTED : PortFailure.Execution.UNKNOWN,
                     true);
         } catch (InterruptedException e) {
-            AppLogger.current().warn("login session store call interrupted");
+            AppLogger.current()
+                    .warn(
+                            "login session store call interrupted",
+                            LogField.errorType(e.getClass().getName()),
+                            LogField.safeStackTrace(e));
             boolean prevented = gate.compareAndSet(0, 2);
             future.cancel(true);
             Thread.currentThread().interrupt();
@@ -256,13 +257,7 @@ public final class RedisLoginSessionStore implements LoginSessionStore, AutoClos
                     false);
         } catch (ExecutionException e) {
             if (e.getCause() instanceof PortFailure failure) throw failure;
-            // 원인은 예외 클래스 이름과 스택 프레임만 남긴다(메시지에는 키·값이 섞일 수 있다)
-            Throwable cause = e.getCause() == null ? e : e.getCause();
-            AppLogger.current()
-                    .warn(
-                            "login session store call failed",
-                            LogField.errorType(cause.getClass().getName()),
-                            LogField.safeStackTrace(cause));
+            // 원인(예외 클래스·메시지 없는 스택)은 명령을 실행한 스레드의 redis call failed 줄에 있다(메시지에는 키·값이 섞일 수 있다)
             throw failure(
                     gate.get() == 1
                             ? PortFailure.Execution.UNKNOWN

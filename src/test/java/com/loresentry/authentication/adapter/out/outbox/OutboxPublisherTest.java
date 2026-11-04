@@ -27,6 +27,7 @@ import org.springframework.kafka.core.DefaultKafkaProducerFactory;
 import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.transaction.IllegalTransactionStateException;
 import org.springframework.transaction.support.TransactionTemplate;
+import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.json.JsonMapper;
 
 /**
@@ -119,6 +120,21 @@ class OutboxPublisherTest extends KafkaTestSupport {
                 .single();
     }
 
+    /**
+     * 찍힌 ECS JSON 줄 중 그 이벤트(cloudevent.id)의 줄. outbox 행 하나의 범위(LogScope.outboxEvent)가 붙인 필드로 고른다.
+     */
+    private List<JsonNode> rowLines(CapturedOutput output, UUID id) {
+        return output.getOut()
+                .lines()
+                .filter(line -> line.startsWith("{"))
+                .map(json::readTree)
+                .filter(
+                        line ->
+                                id.toString()
+                                        .equals(line.at("/loresentry/cloudevent/id").asString()))
+                .toList();
+    }
+
     /** 레코드의 header 값을 글자로 읽는다. header 는 바이트로 실려 오고, 같은 이름이 여럿이면 마지막 것을 본다. */
     private static String header(ConsumerRecord<String, String> record, String name) {
         return new String(record.headers().lastHeader(name).value(), StandardCharsets.UTF_8);
@@ -154,6 +170,50 @@ class OutboxPublisherTest extends KafkaTestSupport {
                 .isEqualTo(userId.toString());
         // 발행 표시가 남았다.
         assertThat(publishedAt(id)).isNotNull();
+    }
+
+    /**
+     * 보낸 행의 줄은 그 행을 만든 요청의 trace(행에 저장된 traceparent)로 남고, 받는 서비스의 inbox 줄과 같은 이벤트 필드(ID·종류·대상)와
+     * relay 작업 이름을 갖는다. UserDeleted 의 대상은 탈퇴한 사용자라 user.id 로도 남는다.
+     */
+    @Test
+    void thePublishedLineCarriesTheRowTraceEventFieldsAndTheDeletedUser(CapturedOutput output) {
+        UUID userId = UUID.randomUUID();
+        String trace = "4bf92f3577b34da6a3ce929d0e0e4736";
+        UUID id =
+                jdbcClient
+                        .sql(
+                                """
+                                insert into outbox_events (event_type, event_key, aggregate_id, payload, traceparent)
+                                values ('UserDeleted', :key, :aggregate, :payload::jsonb, :traceparent)
+                                returning id
+                                """)
+                        .param("key", userId.toString())
+                        .param("aggregate", userId)
+                        .param("payload", "{\"user_id\":\"" + userId + "\"}")
+                        .param("traceparent", "00-" + trace + "-00f067aa0ba902b7-01")
+                        .query(UUID.class)
+                        .single();
+
+        assertThat(publisher.publishBatch()).isEqualTo(new Round(Outcome.MORE, 1, 0, 0));
+
+        JsonNode published =
+                rowLines(output, id).stream()
+                        .filter(
+                                line ->
+                                        "outbox event published"
+                                                .equals(line.get("message").asString()))
+                        .findFirst()
+                        .orElseThrow();
+        assertThat(published.at("/trace/id").asString()).isEqualTo(trace);
+        assertThat(published.at("/loresentry/cloudevent/type").asString()).isEqualTo("UserDeleted");
+        assertThat(published.at("/loresentry/cloudevent/subject").asString())
+                .isEqualTo(userId.toString());
+        assertThat(published.at("/loresentry/schedule/name").asString()).isEqualTo("outbox-relay");
+        assertThat(published.at("/user/id").asString()).isEqualTo(userId.toString());
+        assertThat(published.at("/loresentry/kafka/topic").asString())
+                .isEqualTo(USER_DELETED_TOPIC);
+        assertThat(published.at("/log/layer").asString()).isEqualTo("publisher");
     }
 
     /** 한 번 보낸 행은 다시 고르지 않는다. 두 번째 회차는 보낼 것이 없고, 발행 시각도 처음 그대로다. */
@@ -266,7 +326,8 @@ class OutboxPublisherTest extends KafkaTestSupport {
      */
     @Test
     void quarantinesARowWithAnEventTypeTheContractDoesNotNameAndGoesOn(CapturedOutput output) {
-        UUID unknown = insert("Mystery", UUID.randomUUID().toString(), UUID.randomUUID(), "{}");
+        UUID subject = UUID.randomUUID();
+        UUID unknown = insert("Mystery", UUID.randomUUID().toString(), subject, "{}");
         UUID next = insertUserDeleted(UUID.randomUUID());
 
         // 격리는 다시 보낼 실패가 아니므로 MORE 다. 뒤의 행 하나를 보냈고 하나를 격리했다.
@@ -279,9 +340,33 @@ class OutboxPublisherTest extends KafkaTestSupport {
         assertThat((String) row.get("last_error")).contains("unknown event type: Mystery");
         // 뒤의 행은 막히지 않고 나갔다.
         assertThat(publishedAt(next)).isNotNull();
-        // 운영에서 이 문구로 격리를 찾는다.
-        assertThat(output.getOut())
-                .contains("outbox event quarantined: id=" + unknown + ", type=Mystery");
+        // 운영에서 이 문구로 격리를 찾는다. 격리 줄과 저장소의 격리 기록 줄이 같은 행의 줄로, 이벤트의 ID·종류·대상과 relay 작업 이름을
+        // 갖는다. 계약에 없는 종류라 대상이 사용자인지 알 수 없어 user.id 는 없다
+        var lines = rowLines(output, unknown);
+        assertThat(lines)
+                .extracting(line -> line.get("message").asString())
+                .contains("outbox event quarantine", "outbox event quarantined");
+        assertThat(lines)
+                .allSatisfy(
+                        line -> {
+                            assertThat(line.at("/loresentry/cloudevent/type").asString())
+                                    .isEqualTo("Mystery");
+                            assertThat(line.at("/loresentry/cloudevent/subject").asString())
+                                    .isEqualTo(subject.toString());
+                            assertThat(line.at("/loresentry/schedule/name").asString())
+                                    .isEqualTo("outbox-relay");
+                            assertThat(line.has("user")).isFalse();
+                        });
+        JsonNode quarantined =
+                lines.stream()
+                        .filter(
+                                line ->
+                                        "outbox event quarantined"
+                                                .equals(line.get("message").asString()))
+                        .findFirst()
+                        .orElseThrow();
+        assertThat(quarantined.at("/error/type").asString())
+                .isEqualTo("java.lang.IllegalArgumentException");
         // 격리된 행은 다음 회차가 다시 고르지 않는다.
         assertThat(publisher.publishBatch().outcome()).isEqualTo(Outcome.IDLE);
     }
@@ -332,9 +417,24 @@ class OutboxPublisherTest extends KafkaTestSupport {
         assertThat(row.get("published_at")).isNull();
         // 첫 행에서 멈췄으므로 둘째 행은 시도하지 않았다. 시도하지 않은 행의 횟수는 올리지 않는다.
         assertThat(row(second).get("attempts")).isEqualTo(0);
-        // 운영에서 이 문구로 반복 실패를 찾는다. 뒤에는 이유별 개수가 붙는다 — 시도한 행이 하나뿐이라 1 이다.
-        assertThat(output.getOut())
-                .contains(
-                        "outbox events still failing: {org.apache.kafka.common.errors.TimeoutException=1}");
+        // 운영에서 이 문구로 반복 실패를 찾는다. 이유마다 한 줄이고 그 이유의 행 수가 붙는다 — 시도한 행이 하나뿐이라 1 이다.
+        JsonNode stillFailing =
+                output.getOut()
+                        .lines()
+                        .filter(line -> line.startsWith("{"))
+                        .map(json::readTree)
+                        .filter(
+                                line ->
+                                        "outbox events still failing"
+                                                .equals(line.get("message").asString()))
+                        .findFirst()
+                        .orElseThrow();
+        assertThat(stillFailing.at("/error/type").asString())
+                .isEqualTo("org.apache.kafka.common.errors.TimeoutException");
+        assertThat(stillFailing.at("/loresentry/result/rows").asLong()).isEqualTo(1L);
+        // 실패 기록 줄(저장소의 mark failed 줄 포함)도 그 행의 이벤트 필드를 가진 그 행의 줄로 남는다
+        assertThat(rowLines(output, first))
+                .extracting(line -> line.get("message").asString())
+                .contains("outbox event mark failed");
     }
 }

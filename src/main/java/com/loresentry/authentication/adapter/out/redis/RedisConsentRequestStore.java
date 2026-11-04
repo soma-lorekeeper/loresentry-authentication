@@ -1,5 +1,6 @@
 package com.loresentry.authentication.adapter.out.redis;
 
+import com.loresentry.authentication.adapter.out.logging.LogFlow;
 import com.loresentry.authentication.application.port.out.ConsentRequestStore;
 import com.loresentry.authentication.application.port.out.PortFailure;
 import com.loresentry.authentication.domain.ConsentId;
@@ -60,46 +61,49 @@ public final class RedisConsentRequestStore implements ConsentRequestStore {
 
     private Optional<Pending> execute(ConsentId id, String mode, String user, String version) {
         try {
-            String raw =
-                    redis.execute(
-                            SCRIPT,
-                            List.of("auth:consent:by-id:" + id.hash()),
-                            mode,
-                            user,
-                            version);
-            if (raw == null) return Optional.empty();
-            var value = JSON.readTree(raw);
-            if (!value.isObject()
-                    || !value.propertyNames()
-                            .equals(
-                                    Set.of(
-                                            "user_id",
-                                            "terms_version_id",
-                                            "created_at",
-                                            "expires_at"))
-                    || !value.get("user_id").isString()
-                    || !value.get("terms_version_id").isString()
-                    || !value.get("created_at").isIntegralNumber()
-                    || !value.get("expires_at").isIntegralNumber())
-                throw new IllegalArgumentException();
-            var userId = uuid(value.get("user_id").asString());
-            var termsId = uuid(value.get("terms_version_id").asString());
-            long created = value.get("created_at").asLong();
-            long expires = value.get("expires_at").asLong();
-            if (created <= 0 || expires - created != 1800000) throw new IllegalArgumentException();
-            return Optional.of(
-                    new Pending(
-                            userId,
-                            termsId,
-                            Instant.ofEpochMilli(created),
-                            Instant.ofEpochMilli(expires)));
+            // Redis 스크립트 호출 하나와 돌려받은 값의 검사. 결과 줄(redis call completed·failed, 걸린 시간, 실패면 예외 종류·메시지
+            // 없는 스택)은 LogFlow 가 남긴다. 스크립트가 약속과 다른 값을 돌려준 것도 이 호출의 실패로 본다
+            return LogFlow.call(
+                    "redis",
+                    call -> {
+                        String raw =
+                                redis.execute(
+                                        SCRIPT,
+                                        List.of("auth:consent:by-id:" + id.hash()),
+                                        mode,
+                                        user,
+                                        version);
+                        if (raw == null) return Optional.<Pending>empty();
+                        var value = JSON.readTree(raw);
+                        if (!value.isObject()
+                                || !value.propertyNames()
+                                        .equals(
+                                                Set.of(
+                                                        "user_id",
+                                                        "terms_version_id",
+                                                        "created_at",
+                                                        "expires_at"))
+                                || !value.get("user_id").isString()
+                                || !value.get("terms_version_id").isString()
+                                || !value.get("created_at").isIntegralNumber()
+                                || !value.get("expires_at").isIntegralNumber())
+                            throw new IllegalArgumentException();
+                        var userId = uuid(value.get("user_id").asString());
+                        var termsId = uuid(value.get("terms_version_id").asString());
+                        long created = value.get("created_at").asLong();
+                        long expires = value.get("expires_at").asLong();
+                        if (created <= 0 || expires - created != 1800000)
+                            throw new IllegalArgumentException();
+                        return Optional.of(
+                                new Pending(
+                                        userId,
+                                        termsId,
+                                        Instant.ofEpochMilli(created),
+                                        Instant.ofEpochMilli(expires)));
+                    });
         } catch (RuntimeException error) {
-            // 원인은 예외 클래스 이름과 스택 프레임만 남긴다(메시지에는 SQL·키·값이 섞일 수 있다). 이 실패는 PortFailure 로 바뀌어 원인이 사라진다
-            AppLogger.current()
-                    .warn(
-                            "consent request store call failed",
-                            LogField.errorType(error.getClass().getName()),
-                            LogField.safeStackTrace(error));
+            // 원인은 바로 앞의 redis call failed 줄에 있다(예외 메시지에는 키·값이 섞일 수 있어 남기지 않는다). 이 실패는 PortFailure 로
+            // 바뀐다
             throw new PortFailure(
                     PortFailure.Kind.UNAVAILABLE, PortFailure.Execution.UNKNOWN, false);
         }
@@ -112,24 +116,25 @@ public final class RedisConsentRequestStore implements ConsentRequestStore {
                         "consent request consume",
                         LogField.param("terms_version_id", termsVersionId));
         try {
-            var result =
-                    redis.execute(
-                            SCRIPT,
-                            List.of("auth:consent:by-id:" + id.hash()),
-                            "consume",
-                            userId.toString(),
-                            termsVersionId.toString());
-            if (result == null) return Consumption.INVALID;
-            if ("#version-mismatch".equals(result)) return Consumption.VERSION_MISMATCH;
-            if ("consumed".equals(result)) return Consumption.CONSUMED;
-            throw new IllegalArgumentException();
+            // Redis 스크립트 호출 하나와 돌려받은 값의 검사. 결과 줄은 LogFlow 가 남기고, 약속 밖의 값도 이 호출의 실패로 본다
+            return LogFlow.call(
+                    "redis",
+                    call -> {
+                        var result =
+                                redis.execute(
+                                        SCRIPT,
+                                        List.of("auth:consent:by-id:" + id.hash()),
+                                        "consume",
+                                        userId.toString(),
+                                        termsVersionId.toString());
+                        if (result == null) return Consumption.INVALID;
+                        if ("#version-mismatch".equals(result)) return Consumption.VERSION_MISMATCH;
+                        if ("consumed".equals(result)) return Consumption.CONSUMED;
+                        throw new IllegalArgumentException();
+                    });
         } catch (RuntimeException error) {
-            // 원인은 예외 클래스 이름과 스택 프레임만 남긴다(메시지에는 SQL·키·값이 섞일 수 있다). 이 실패는 PortFailure 로 바뀌어 원인이 사라진다
-            AppLogger.current()
-                    .warn(
-                            "consent request store call failed",
-                            LogField.errorType(error.getClass().getName()),
-                            LogField.safeStackTrace(error));
+            // 원인은 바로 앞의 redis call failed 줄에 있다(예외 메시지에는 키·값이 섞일 수 있어 남기지 않는다). 이 실패는 PortFailure 로
+            // 바뀐다
             throw new PortFailure(
                     PortFailure.Kind.UNAVAILABLE, PortFailure.Execution.UNKNOWN, false);
         }

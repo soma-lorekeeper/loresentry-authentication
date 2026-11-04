@@ -42,6 +42,7 @@ public final class RegistrationService implements RegisterIdentityUseCase {
             AppLogger.current()
                     .warn(
                             "account register rejected",
+                            LogField.errorType(OAUTH_IDENTITY_INVALID.name()),
                             LogField.resultCode("reason", rejected, IDENTITY_REJECTIONS));
             throw new AuthFailure(OAUTH_IDENTITY_INVALID);
         }
@@ -68,9 +69,10 @@ public final class RegistrationService implements RegisterIdentityUseCase {
                                                 user.id(),
                                                 email))
                                 .user();
+                // 새로 만든 계정의 사용자. 이 뒤의 줄과 로그인 결과 줄에 user.id가 붙는다
+                AppLogger.current().identify(created.id());
                 // 가입 결과 줄. 새 계정이라 이메일 갱신은 없다
                 AppLogger.current()
-                        .withUser(created.id())
                         .info(
                                 "account register completed",
                                 LogField.result("created", true),
@@ -79,7 +81,10 @@ public final class RegistrationService implements RegisterIdentityUseCase {
             } catch (PortFailure failure) {
                 if (failure.kind() != PortFailure.Kind.IDENTITY_ALREADY_REGISTERED) throw failure;
                 // 같은 신원의 동시 가입 충돌. 먼저 커밋된 계정을 다시 읽어 그 계정으로 로그인한다
-                AppLogger.current().warn("account register conflict");
+                AppLogger.current()
+                        .warn(
+                                "account register conflict",
+                                LogField.errorType(failure.kind().name()));
                 var winner =
                         accounts.findByIdentity(identity.provider(), identity.subject())
                                 .orElseThrow(
@@ -87,7 +92,9 @@ public final class RegistrationService implements RegisterIdentityUseCase {
                                             // 충돌을 알렸는데 먼저 커밋된 계정을 다시 읽지 못했다. 503으로 멈춘다
                                             AppLogger.current()
                                                     .warn(
-                                                            "account register conflict: committed account missing");
+                                                            "account register conflict: committed account missing",
+                                                            LogField.errorType(
+                                                                    LOGIN_UNAVAILABLE.name()));
                                             return new AuthFailure(LOGIN_UNAVAILABLE);
                                         });
                 return refreshEmail(winner, identity);
@@ -98,10 +105,11 @@ public final class RegistrationService implements RegisterIdentityUseCase {
     }
 
     private User refreshEmail(AccountStore.Account account, OidcClient.Identity identity) {
+        // 이미 있는 계정(먼저 커밋된 계정 포함)의 사용자. 이 뒤의 줄(이메일 갱신 store 줄)과 로그인 결과 줄에 user.id가 붙는다
+        AppLogger.current().identify(account.user().id());
         if (!hasEmail(identity.email()) || identity.email().equals(account.identity().email())) {
             // 가입 결과 줄(기존 계정, 이메일 그대로). 이메일 값은 남기지 않는다
             AppLogger.current()
-                    .withUser(account.user().id())
                     .info(
                             "account register completed",
                             LogField.result("created", false),
@@ -117,7 +125,6 @@ public final class RegistrationService implements RegisterIdentityUseCase {
                         .user();
         // 가입 결과 줄(기존 계정, 공급자가 준 새 이메일로 갱신). 이메일 값은 남기지 않는다
         AppLogger.current()
-                .withUser(updated.id())
                 .info(
                         "account register completed",
                         LogField.result("created", false),

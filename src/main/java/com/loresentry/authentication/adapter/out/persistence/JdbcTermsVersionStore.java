@@ -10,7 +10,6 @@ import com.loresentry.authentication.logging.LogField;
 import java.sql.Timestamp;
 import java.time.Instant;
 import java.util.Optional;
-import java.util.Set;
 import java.util.UUID;
 import lombok.RequiredArgsConstructor;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -61,7 +60,7 @@ public class JdbcTermsVersionStore implements TermsVersionStore {
                         LogField.code(
                                 "locale",
                                 locale == null ? null : locale.code(),
-                                Set.of("ko", "en")));
+                                SupportedLocale.CODES));
         try {
             return jdbc
                     .query(

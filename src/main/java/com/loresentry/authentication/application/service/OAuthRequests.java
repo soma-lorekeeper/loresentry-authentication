@@ -95,6 +95,10 @@ public final class OAuthRequests {
                                         AppLogger.current()
                                                 .warn(
                                                         "login request rejected",
+                                                        LogField.errorType(
+                                                                AuthFailure.Reason
+                                                                        .OAUTH_REQUEST_INVALID
+                                                                        .name()),
                                                         LogField.resultCode(
                                                                 "reason", "NOT_FOUND", REJECTIONS),
                                                         LogField.result(
@@ -142,7 +146,10 @@ public final class OAuthRequests {
             }
             // 같은 ID의 요청이 이미 있어 새 ID로 다시 만든다. ID 값은 남기지 않는다
             AppLogger.current()
-                    .warn("login request id collision", LogField.param("attempt", attempt));
+                    .warn(
+                            "login request id collision",
+                            LogField.errorType("LOGIN_REQUEST_ID_COLLISION"),
+                            LogField.param("attempt", attempt));
         }
         throw new AuthFailure(AuthFailure.Reason.LOGIN_UNAVAILABLE);
     }
@@ -156,6 +163,7 @@ public final class OAuthRequests {
             AppLogger.current()
                     .warn(
                             "login request rejected",
+                            LogField.errorType(AuthFailure.Reason.OAUTH_REQUEST_INVALID.name()),
                             LogField.resultCode("reason", "INVALID_INPUT", REJECTIONS),
                             LogField.result("login_request_consumed", false));
             throw invalid(AuthFailure.Consumption.NOT_CONSUMED);
@@ -172,6 +180,9 @@ public final class OAuthRequests {
                                 AppLogger.current()
                                         .warn(
                                                 "login request rejected",
+                                                LogField.errorType(
+                                                        AuthFailure.Reason.OAUTH_REQUEST_INVALID
+                                                                .name()),
                                                 LogField.resultCode(
                                                         "reason", "ALREADY_CONSUMED", REJECTIONS),
                                                 LogField.result("login_request_consumed", false));
@@ -207,6 +218,7 @@ public final class OAuthRequests {
             AppLogger.current()
                     .warn(
                             "login request rejected",
+                            LogField.errorType(AuthFailure.Reason.OAUTH_REQUEST_INVALID.name()),
                             LogField.resultCode("reason", rejected, REJECTIONS),
                             LogField.result("login_request_consumed", consumed(consumption)));
             throw invalid(consumption);
@@ -231,6 +243,7 @@ public final class OAuthRequests {
             AppLogger.current()
                     .warn(
                             "login request rejected",
+                            LogField.errorType(AuthFailure.Reason.OAUTH_REQUEST_INVALID.name()),
                             LogField.resultCode("reason", "CORRUPT_STATE", REJECTIONS),
                             LogField.result("login_request_consumed", consumed(consumption)));
         }

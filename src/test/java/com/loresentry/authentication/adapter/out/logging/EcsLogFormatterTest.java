@@ -99,6 +99,51 @@ class EcsLogFormatterTest {
     }
 
     @Test
+    void writesContextFieldsFromMdcOnFrameworkLines() {
+        // 프레임워크 줄: key-value가 없어도 AppLogger가 바인딩하며 MDC에 넣은 흐름의 문맥 필드가 붙는다
+        var framework = event(Level.WARN, "framework line", null);
+        framework.setMDCPropertyMap(
+                Map.of(
+                        "url.path",
+                        "/auth/terms/accept",
+                        "http.route",
+                        "/auth/terms/accept",
+                        "http.request.method",
+                        "POST",
+                        "loresentry.schedule.name",
+                        "outbox-relay",
+                        "loresentry.cloudevent.id",
+                        "e-1",
+                        "loresentry.cloudevent.type",
+                        "UserDeleted",
+                        "loresentry.cloudevent.subject",
+                        "u-1",
+                        "loresentry.param.terms_version_id",
+                        "not a context key"));
+        JsonNode json = format(framework);
+        assertThat(json.at("/url/path").asString()).isEqualTo("/auth/terms/accept");
+        assertThat(json.at("/http/route").asString()).isEqualTo("/auth/terms/accept");
+        assertThat(json.at("/http/request/method").asString()).isEqualTo("POST");
+        assertThat(json.at("/loresentry/schedule/name").asString()).isEqualTo("outbox-relay");
+        assertThat(json.at("/loresentry/cloudevent/id").asString()).isEqualTo("e-1");
+        assertThat(json.at("/loresentry/cloudevent/type").asString()).isEqualTo("UserDeleted");
+        assertThat(json.at("/loresentry/cloudevent/subject").asString()).isEqualTo("u-1");
+        // 목록 밖의 MDC 값은 내보내지 않는다
+        assertThat(json.at("/loresentry/param").isMissingNode()).isTrue();
+    }
+
+    @Test
+    void lineKeyValuesWinOverMdcContextFields() {
+        // AppLogger 줄은 문맥 필드를 key-value로도 넘긴다. 둘이 다르면 그 줄에 넘긴 값이 남는다
+        var line = event(Level.INFO, "d", null);
+        line.addKeyValuePair(new KeyValuePair("url.path", "/from-line"));
+        line.setMDCPropertyMap(Map.of("url.path", "/from-mdc"));
+        JsonNode json = format(line);
+        assertThat(json.at("/url/path").asString()).isEqualTo("/from-line");
+        assertThat(json.get("message").asString()).isEqualTo("d");
+    }
+
+    @Test
     void writesTheExceptionAsErrorFieldsOnOneLine() {
         JsonNode json =
                 format(event(Level.ERROR, "request failed", new IllegalStateException("boom")));

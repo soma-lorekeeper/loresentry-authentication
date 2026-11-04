@@ -1,15 +1,12 @@
 package com.loresentry.authentication.adapter.in.web;
 
-import com.loresentry.authentication.adapter.out.logging.TraceContext;
+import com.loresentry.authentication.adapter.out.logging.LogFlow;
 import com.loresentry.authentication.logging.AppLogger;
-import com.loresentry.authentication.logging.LogField;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import java.io.IOException;
-import java.time.Duration;
-import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.Map;
@@ -21,26 +18,25 @@ import org.springframework.web.servlet.mvc.method.annotation.RequestMappingHandl
 import org.springframework.web.util.ServletRequestPathUtils;
 
 /**
- * gateway가 부른 요청 하나의 시작점. 요청마다 {@link AppLogger}를 만들어 바인딩하고 접근 로그를 남긴다.
+ * gateway가 부른 요청 하나의 시작점. 이 필터는 HTTP 값만 꺼내 로깅 팩토리({@link LogFlow#request})에 넘긴다. 로그 객체를 만들어 바인딩하는
+ * 일, 접근 로그(request received·request completed), 걸린 시간, 응답 상태로 정하는 레벨, 처리되지 않은 예외 줄은 모두 LogFlow가
+ * 한다(LOG_SCHEMA.md 5절 "만들기", "접근 로그").
  *
  * <p>순서: Spring observation 필터(HIGHEST_PRECEDENCE + 1)가 gateway가 보낸 traceparent를 이어 서버 span을 연 뒤 이
  * 필터(+2)가 돈다. 그래서 이 요청의 모든 줄이 gateway 줄과 같은 trace.id를 갖는다. {@link ErrorBoundaryFilter}(+3)는 이 필터
  * 안쪽이라, 그 필터가 쓰는 오류 응답도 이 필터의 결과 줄에 남는다.
  *
- * <p>하는 일
+ * <p>꺼내는 값
  *
- * <ol>
- *   <li>지금 span의 traceId·spanId와 gateway가 확인해 보낸 사용자(X-User-Id)로 로그 객체를 만든다. 요청 하나의 모든 줄에 이 서비스가 받은
- *       경로({@code url.path})와 경로 템플릿({@code http.route})을 붙인다. 경로 템플릿은 Spring MVC가 나중에 고를 것을 요청 시작
- *       때 미리 찾는다.
- *   <li>"request received"와 "request completed"(상태·걸린 시간)를 남긴다. 헬스체크도 같고, 그 요청의 모든 줄에 {@code tags:
- *       health}가 붙어 정상(info) 줄은 Logstash가 버린다. 결과 줄에는 예외 처리기가 {@link
- *       AppLogger#addToOutcome(LogField...)}로 맡긴 실패 이유(error.type)도 붙인다. 실패를 따로 찍지 않으므로 요청 하나의 결과는
- *       늘 한 줄이다.
- * </ol>
+ * <ul>
+ *   <li>이 서비스가 받은 경로({@code url.path}). 쿼리스트링은 남기지 않는다(locale 등과 함께 OAuth 값이 실릴 수 있다)
+ *   <li>경로 템플릿({@code http.route}). Spring MVC가 나중에 고를 것을 요청 시작 때 미리 찾는다
+ *   <li>메서드({@code http.request.method})
+ *   <li>gateway가 확인해 보낸 사용자(X-User-Id)
+ *   <li>응답 상태. 필터 체인이 끝난 뒤 LogFlow에 알린다
+ * </ul>
  *
- * <p>쿼리스트링은 남기지 않는다(locale 등과 함께 OAuth 값이 실릴 수 있다). 경로만 {@code url.path}에 넣는다. 요청 본문(OAuth
- * code·state, 세션 ID, 동의 ID)은 읽지 않는다.
+ * <p>요청 본문(OAuth code·state, 세션 ID, 동의 ID)은 읽지 않는다.
  */
 public final class RequestLogFilter extends OncePerRequestFilter {
     /** Boot 기본 오류 응답(/error)에도 trace_id를 싣기 위해 요청 속성에 남기는 이름. */
@@ -60,56 +56,19 @@ public final class RequestLogFilter extends OncePerRequestFilter {
     protected void doFilterInternal(
             HttpServletRequest request, HttpServletResponse response, FilterChain chain)
             throws ServletException, IOException {
-        String path = request.getRequestURI();
-        AppLogger logger =
-                TraceContext.newLogger()
-                        .withUser(user(request))
-                        .with(LogField.urlPath(path), LogField.route(route(request)));
-        // 헬스체크 흐름의 모든 줄에 tags: health를 붙인다. 정상(info) 줄은 Logstash가 버리고, 실패한 헬스체크의 warn·error는 남는다
-        if (health(path)) logger = logger.withTag("health");
-        if (logger.traceId() != null) request.setAttribute(TRACE_ATTRIBUTE, logger.traceId());
-        long started = System.nanoTime();
-        try (var bound = AppLogger.bind(logger)) {
-            logger.info("request received", LogField.httpMethod(request.getMethod()));
-            try {
-                chain.doFilter(request, response);
-            } catch (IOException | ServletException | RuntimeException failure) {
-                // 컨트롤러 예외 처리기가 잡지 못한 예외. 이 뒤 Tomcat이 /error로 500을 쓴다.
-                // 예외 메시지에는 토큰·OAuth 값·SQL이 섞일 수 있어 예외 대신 클래스 이름과 프레임만 남긴다
-                logger.error(
-                        "request failed with an unhandled exception",
-                        concat(
-                                new LogField[] {
-                                    LogField.errorType(failure.getClass().getName()),
-                                    LogField.safeStackTrace(failure),
-                                    LogField.httpMethod(request.getMethod()),
-                                    LogField.statusCode(500),
-                                    LogField.duration(elapsed(started))
-                                },
-                                logger.outcomeFields()));
-                throw failure;
-            }
-            completed(logger, request, response.getStatus(), started);
-        }
-    }
-
-    /**
-     * 결과 줄. 응답 상태로 레벨을 정한다: 5xx error, 4xx warn, 그 외 info. 2xx 헬스체크 줄은 Logstash가 버린다. 기본 필드(메서드,
-     * 상태, 걸린 시간) 뒤에 이 요청에 맡겨진 결과 필드를 그대로 붙인다. url.path·http.route는 문맥 필드로 이미 붙어 있다.
-     */
-    private static void completed(
-            AppLogger logger, HttpServletRequest request, int status, long started) {
-        LogField[] fields =
-                concat(
-                        new LogField[] {
-                            LogField.httpMethod(request.getMethod()),
-                            LogField.statusCode(status),
-                            LogField.duration(elapsed(started))
-                        },
-                        logger.outcomeFields());
-        if (status >= 500) logger.error("request completed", fields);
-        else if (status >= 400) logger.warn("request completed", fields);
-        else logger.info("request completed", fields);
+        LogFlow.request(
+                request.getRequestURI(),
+                route(request),
+                request.getMethod(),
+                user(request),
+                flow -> {
+                    // Boot 기본 오류 응답(/error)에도 trace_id를 싣도록 요청 속성에 남긴다(로그가 아니라 응답 본문 값이다)
+                    String traceId = AppLogger.current().traceId();
+                    if (traceId != null) request.setAttribute(TRACE_ATTRIBUTE, traceId);
+                    chain.doFilter(request, response);
+                    // 결과 줄(request completed)의 상태. 레벨은 LogFlow가 이 값으로 정한다
+                    flow.status(response.getStatus());
+                });
     }
 
     /**
@@ -156,19 +115,5 @@ public final class RequestLogFilter extends OncePerRequestFilter {
         } catch (IllegalArgumentException notUuid) {
             return null;
         }
-    }
-
-    private static boolean health(String path) {
-        return "/health".equals(path) || path.startsWith("/health/");
-    }
-
-    private static LogField[] concat(LogField[] first, LogField[] second) {
-        LogField[] all = Arrays.copyOf(first, first.length + second.length);
-        System.arraycopy(second, 0, all, first.length, second.length);
-        return all;
-    }
-
-    private static Duration elapsed(long started) {
-        return Duration.ofNanos(System.nanoTime() - started);
     }
 }

@@ -16,6 +16,7 @@ import org.springframework.boot.test.system.CapturedOutput;
 import org.springframework.boot.test.system.OutputCaptureExtension;
 import org.springframework.test.annotation.DirtiesContext;
 import org.springframework.test.context.TestPropertySource;
+import tools.jackson.databind.json.JsonMapper;
 
 /**
  * relay 를 켠 앱에서, outbox 에 들어간 행이 누가 부르지 않아도 Kafka 로 나가는지 확인한다. 다른 테스트는 한 회차를 직접 부르지만 여기서는 부르지 않는다 —
@@ -73,9 +74,39 @@ class OutboxRelayEnabledTest extends KafkaTestSupport {
                                             .optional()
                                             .orElse(null);
                             assertThat(publishedAt).isNotNull();
-                            // 회차가 끝나면 relay 가 요약을 한 줄 남긴다. 운영에서 relay 가 돌고 있는지를 이 줄로 본다.
-                            assertThat(output.getOut())
-                                    .contains("outbox relay: published=1, quarantined=0, failed=0");
+                            // 회차가 끝나면 relay 가 종료 줄(schedule run completed)과 개수를 남긴다. 운영에서 relay 가
+                            // 돌고 있는지를
+                            // 이 줄로 본다.
+                            var json = JsonMapper.builder().build();
+                            assertThat(
+                                            output.getOut()
+                                                    .lines()
+                                                    .filter(line -> line.startsWith("{"))
+                                                    .map(json::readTree)
+                                                    .filter(
+                                                            line ->
+                                                                    "schedule run completed"
+                                                                                    .equals(
+                                                                                            line.get(
+                                                                                                            "message")
+                                                                                                    .asString())
+                                                                            && "outbox-relay"
+                                                                                    .equals(
+                                                                                            line.at(
+                                                                                                            "/loresentry/schedule/name")
+                                                                                                    .asString())))
+                                    .anySatisfy(
+                                            line -> {
+                                                assertThat(
+                                                                line.at(
+                                                                                "/loresentry/result/published")
+                                                                        .asLong())
+                                                        .isEqualTo(1L);
+                                                assertThat(
+                                                                line.at("/loresentry/result/failed")
+                                                                        .asLong())
+                                                        .isZero();
+                                            });
                         });
     }
 }

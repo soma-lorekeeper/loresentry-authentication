@@ -2,11 +2,19 @@ package com.loresentry.authentication.domain;
 
 import java.util.Arrays;
 import java.util.Optional;
+import java.util.Set;
+import java.util.stream.Collectors;
 
 /** 계정 언어와 약관 번역이 지원하는 언어다. 외부 값은 소문자 코드 ko·en과 정확히 일치할 때만 인정한다. */
 public enum SupportedLocale {
     KO("ko"),
     EN("en");
+
+    /** 지원 언어의 소문자 코드(ko·en). 로그에 언어 코드를 그대로 남겨도 되는 값의 목록으로도 넘긴다(목록 밖의 값은 other). */
+    public static final Set<String> CODES =
+            Arrays.stream(values())
+                    .map(SupportedLocale::code)
+                    .collect(Collectors.toUnmodifiableSet());
 
     private final String code;
 

@@ -22,14 +22,15 @@ import org.springframework.stereotype.Component;
 @Component
 @RequiredArgsConstructor
 public class JpaAccountStore implements AccountStore {
+    /** 로그에 그대로 남겨도 되는 공급자 코드. 지금은 Google 로그인만 있다. 목록 밖의 값은 other 로 남는다. */
+    private static final Set<String> PROVIDERS = Set.of("google");
+
     private final AccountTransactions transactions;
 
     public Optional<Account> findByIdentity(String provider, String subject) {
         // Google subject는 사람을 특정하는 값이라 남기지 않는다. 공급자는 정해진 코드만 남긴다
         AppLogger.current()
-                .info(
-                        "account find by identity",
-                        LogField.code("provider", provider, Set.of("google")));
+                .info("account find by identity", LogField.code("provider", provider, PROVIDERS));
         return invoke(() -> transactions.findByIdentity(provider, subject));
     }
 
@@ -47,9 +48,7 @@ public class JpaAccountStore implements AccountStore {
     public Account updateEmail(String provider, String subject, String email, Instant time) {
         // 이메일·Google subject는 사람을 특정하는 값이라 남기지 않는다
         AppLogger.current()
-                .info(
-                        "account email update",
-                        LogField.code("provider", provider, Set.of("google")));
+                .info("account email update", LogField.code("provider", provider, PROVIDERS));
         return invoke(() -> transactions.updateEmail(provider, subject, email, time));
     }
 

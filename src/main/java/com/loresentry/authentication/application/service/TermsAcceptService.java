@@ -12,8 +12,11 @@ import lombok.RequiredArgsConstructor;
 
 @RequiredArgsConstructor
 public final class TermsAcceptService implements TermsAcceptUseCase {
-    /** 동의 요청을 거절한 이유(consent request rejected 줄의 result.reason). 목록 밖의 값은 other로 남는다. */
-    private static final Set<String> CONSENT_REJECTIONS =
+    /**
+     * 동의 요청을 거절한 이유(consent request rejected 줄의 result.reason). 약관 조회({@link TermsQueryService})도
+     * 같은 목록을 쓴다. 목록 밖의 값은 other로 남는다.
+     */
+    static final Set<String> CONSENT_REJECTIONS =
             Set.of(
                     "INVALID_ID",
                     "NOT_FOUND",
@@ -46,6 +49,7 @@ public final class TermsAcceptService implements TermsAcceptUseCase {
             AppLogger.current()
                     .warn(
                             "consent request rejected",
+                            LogField.errorType(AuthFailure.Reason.CONSENT_REQUEST_INVALID.name()),
                             LogField.resultCode("reason", "INVALID_ID", CONSENT_REJECTIONS));
             throw invalid();
         }
@@ -59,17 +63,24 @@ public final class TermsAcceptService implements TermsAcceptUseCase {
                                         AppLogger.current()
                                                 .warn(
                                                         "consent request rejected",
+                                                        LogField.errorType(
+                                                                AuthFailure.Reason
+                                                                        .CONSENT_REQUEST_INVALID
+                                                                        .name()),
                                                         LogField.resultCode(
                                                                 "reason",
                                                                 "NOT_FOUND",
                                                                 CONSENT_REJECTIONS));
                                         return invalid();
                                     });
+            // 동의 요청에서 처음 알게 된 사용자. 이 뒤의 줄(계정·약관·세션 저장소 줄, 결과 줄 request completed)에 user.id가 붙는다
+            AppLogger.current().identify(pending.userId());
             if (accounts.findById(pending.userId()).isEmpty()) {
                 AppLogger.current()
-                        .withUser(pending.userId())
                         .warn(
                                 "consent request rejected",
+                                LogField.errorType(
+                                        AuthFailure.Reason.CONSENT_REQUEST_INVALID.name()),
                                 LogField.resultCode(
                                         "reason", "ACCOUNT_MISSING", CONSENT_REJECTIONS));
                 throw invalid();
@@ -78,16 +89,22 @@ public final class TermsAcceptService implements TermsAcceptUseCase {
                     versions.current(clock.instant())
                             .orElseThrow(
                                     () -> {
-                                        AppLogger.current().warn("terms current version missing");
+                                        AppLogger.current()
+                                                .warn(
+                                                        "terms current version missing",
+                                                        LogField.errorType(
+                                                                AuthFailure.Reason.LOGIN_UNAVAILABLE
+                                                                        .name()));
                                         return new AuthFailure(
                                                 AuthFailure.Reason.LOGIN_UNAVAILABLE);
                                     });
             if (!current.id().equals(version) || !pending.termsVersionId().equals(version)) {
                 // 409. 화면이 본 버전(요청), 지금 버전, 동의 요청에 묶인 버전을 함께 남겨 어느 쪽이 바뀌었는지 보이게 한다
                 AppLogger.current()
-                        .withUser(pending.userId())
                         .warn(
                                 "terms accept version mismatch",
+                                LogField.errorType(
+                                        AuthFailure.Reason.TERMS_VERSION_MISMATCH.name()),
                                 LogField.param("terms_version_id", version),
                                 LogField.param("current_terms_version_id", current.id()),
                                 LogField.param(
@@ -98,9 +115,10 @@ public final class TermsAcceptService implements TermsAcceptUseCase {
             switch (requests.consume(id, pending.userId(), version)) {
                 case INVALID -> {
                     AppLogger.current()
-                            .withUser(pending.userId())
                             .warn(
                                     "consent request rejected",
+                                    LogField.errorType(
+                                            AuthFailure.Reason.CONSENT_REQUEST_INVALID.name()),
                                     LogField.resultCode(
                                             "reason", "NOT_CONSUMABLE", CONSENT_REJECTIONS));
                     throw invalid();
@@ -108,9 +126,10 @@ public final class TermsAcceptService implements TermsAcceptUseCase {
                 case VERSION_MISMATCH -> {
                     // 위 비교를 통과한 뒤 소모하는 사이에 동의 요청의 버전이 바뀌었다(다른 화면이 약관을 다시 읽음)
                     AppLogger.current()
-                            .withUser(pending.userId())
                             .warn(
                                     "terms accept version mismatch",
+                                    LogField.errorType(
+                                            AuthFailure.Reason.TERMS_VERSION_MISMATCH.name()),
                                     LogField.param("terms_version_id", version),
                                     LogField.param("current_terms_version_id", current.id()),
                                     LogField.param(
@@ -121,9 +140,8 @@ public final class TermsAcceptService implements TermsAcceptUseCase {
             }
             acceptances.accept(pending.userId(), version, clock.instant());
             var issued = SessionIssuance.create(pending.userId(), ids, sessions, accounts);
-            // 약관 동의로 로그인을 마친 결과 줄. 동의 요청에서 처음 알게 된 사용자를 붙인다. 세션 ID는 남기지 않는다
+            // 약관 동의로 로그인을 마친 결과 줄. 세션 ID는 남기지 않는다
             AppLogger.current()
-                    .withUser(pending.userId())
                     .info("terms accept completed", LogField.param("terms_version_id", version));
             return new Accepted(issued.id(), issued.expiresAt());
         } catch (AuthFailure failure) {

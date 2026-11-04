@@ -27,7 +27,10 @@ public class ErrorBoundaryFilter extends OncePerRequestFilter {
             chain.doFilter(request, response);
         } catch (Exception failure) {
             var mapped = ErrorResponses.response(failure, request);
-            if (response.isCommitted()) throw new ServletException("Response processing failed");
+            // 응답을 이미 보내기 시작해 오류 본문을 쓸 수 없다. 원래 예외를 원인으로 실어, 처리되지 않은 예외 줄(LogFlow.request)의
+            // 메시지 없는 스택에 원인이 남게 한다
+            if (response.isCommitted())
+                throw new ServletException("Response processing failed", failure);
             response.resetBuffer();
             response.setStatus(mapped.getStatusCode().value());
             response.setContentType("application/json");
