@@ -5,16 +5,24 @@ import static org.assertj.core.api.Assertions.assertThat;
 import ch.qos.logback.classic.Logger;
 import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.core.read.ListAppender;
+import com.loresentry.authentication.adapter.out.logging.OutboxMetrics;
+import com.loresentry.authentication.adapter.out.logging.TestMeters;
 import com.loresentry.authentication.adapter.out.outbox.Round.Outcome;
 import com.loresentry.authentication.logging.AppLogger;
 import com.loresentry.authentication.support.Slf4jLogSinkExtension;
+import io.opentelemetry.sdk.metrics.SdkMeterProvider;
+import io.opentelemetry.sdk.metrics.data.MetricData;
+import io.opentelemetry.sdk.testing.exporter.InMemoryMetricReader;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.InstantSource;
+import java.time.OffsetDateTime;
+import java.time.ZoneOffset;
 import java.util.HashMap;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -150,6 +158,87 @@ class OutboxRelayTest {
         relay.run();
 
         assertThat(calls).isEqualTo(3);
+    }
+
+    /** relay 의 지표를 읽어 가는 시험용 reader. 테스트마다 새로 만들어, 다른 테스트의 relay 가 등록한 gauge 가 섞이지 않는다. */
+    private final InMemoryMetricReader metricReader = InMemoryMetricReader.create();
+
+    /** 시험용 reader 에 gauge 를 등록하고 가짜 시계로 나이를 재는 지표 객체. */
+    private OutboxMetrics testMetrics() {
+        return TestMeters.outbox(
+                SdkMeterProvider.builder().registerMetricReader(metricReader).build().get("test"),
+                () -> now);
+    }
+
+    /** 지금 내보내는 그 이름의 gauge 값. 없으면 null. */
+    private Double gauge(String name) {
+        return metricReader.collectAllMetrics().stream()
+                .filter(metric -> name.equals(metric.getName()))
+                .map(OutboxRelayTest::firstValue)
+                .filter(Objects::nonNull)
+                .findFirst()
+                .orElse(null);
+    }
+
+    /** gauge의 첫 점의 값. 정수 gauge와 실수 gauge를 모두 읽는다. */
+    private static Double firstValue(MetricData metric) {
+        if (!metric.getLongGaugeData().getPoints().isEmpty())
+            return (double) metric.getLongGaugeData().getPoints().iterator().next().getValue();
+        if (!metric.getDoubleGaugeData().getPoints().isEmpty())
+            return metric.getDoubleGaugeData().getPoints().iterator().next().getValue();
+        return null;
+    }
+
+    /**
+     * 밀린 행은 15초마다 회차를 다 돈 뒤에 세어 지표로 넘기고, "relay 가 돌았다"는 불릴 때마다 넘긴다. 쉬는 중이라 회차를 돌지 않아도 relay 가 불렸다는
+     * 사실은 남는다(스케줄러가 살아 있다).
+     */
+    @Test
+    void reportsTheBacklogEveryFifteenSecondsAndEveryRun() {
+        AtomicInteger counted = new AtomicInteger();
+        OffsetDateTime oldest = OffsetDateTime.ofInstant(now.minusSeconds(30), ZoneOffset.UTC);
+        OutboxRelay relay =
+                new OutboxRelay(
+                        scripted(IDLE, IDLE, IDLE),
+                        () -> {
+                            counted.incrementAndGet();
+                            return new Backlog(2, oldest);
+                        },
+                        testMetrics(),
+                        () -> now);
+
+        relay.run();
+        now = now.plusSeconds(5);
+        relay.run();
+
+        // 처음 회차에서 한 번 세고, 5초 뒤에는 아직 세지 않는다
+        assertThat(counted).hasValue(1);
+        assertThat(gauge("loresentry.outbox.pending")).isEqualTo(2.0);
+        assertThat(gauge("loresentry.outbox.oldest_age")).isEqualTo(35.0);
+        assertThat(gauge("loresentry.outbox.relay.last_run_age")).isEqualTo(0.0);
+
+        now = now.plusSeconds(10);
+        relay.run();
+
+        assertThat(counted).hasValue(2);
+    }
+
+    /** 세다가 실패해도(DB 에 닿지 못함) relay 는 계속 돌고 줄을 남기지 않는다. 지표는 마지막 값을 그대로 내보낸다. */
+    @Test
+    void keepsRunningQuietlyWhenTheBacklogCannotBeCounted() {
+        OutboxRelay relay =
+                new OutboxRelay(
+                        scripted(IDLE),
+                        () -> {
+                            throw new IllegalStateException("database unreachable");
+                        },
+                        testMetrics(),
+                        () -> now);
+
+        relay.run();
+
+        assertThat(relayMessages()).isEmpty();
+        assertThat(gauge("loresentry.outbox.relay.last_run_age")).isEqualTo(0.0);
     }
 
     /** 실패가 이어지면 쉬는 시간이 1, 2, 4, 8초로 늘다가 10초에서 멈춘다. 쉬는 동안에는 불려도 회차를 돌지 않는다. */

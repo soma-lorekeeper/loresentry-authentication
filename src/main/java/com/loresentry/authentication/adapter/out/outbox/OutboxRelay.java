@@ -1,6 +1,7 @@
 package com.loresentry.authentication.adapter.out.outbox;
 
 import com.loresentry.authentication.adapter.out.logging.LogFlow;
+import com.loresentry.authentication.adapter.out.logging.OutboxMetrics;
 import com.loresentry.authentication.adapter.out.outbox.Round.Outcome;
 import com.loresentry.authentication.logging.AppLogger;
 import com.loresentry.authentication.logging.LogField;
@@ -30,6 +31,9 @@ import org.springframework.stereotype.Component;
  *   <li>회차가 실패하면 쉬는 시간을 늘린다(backoff). 실패가 아니면 평소 상태로 돌아간다.
  *   <li>보내거나 격리하거나 실패한 행이 있었으면 시작·종료 줄을 남긴다(LogFlow.polling).
  * </ol>
+ *
+ * <p>불릴 때마다 지표(OutboxMetrics)에 "relay 가 돌았다"를 알리고, {@link #BACKLOG_EVERY} 마다 밀린 행을 세어 함께 알린다(docs
+ * ALERTING.md 7절, 경보 OutboxBacklog). 세는 일은 줄을 남기지 않으므로 할 일이 없는 회차는 여전히 아무 줄도 남기지 않는다.
  *
  * <p>{@code kafka.producer.relay.enabled} 가 false 면 이 객체가 만들어지지 않아 relay 가 돌지 않는다. 값을 적지 않으면 켠 것으로
  * 본다. 테스트에서는 꺼 둔다 — 뒤에서 돌면 테스트가 넣은 행을 먼저 가져가 버린다.
@@ -66,11 +70,23 @@ class OutboxRelay {
      */
     static final Duration MAX_BACKOFF = Duration.ofSeconds(10);
 
+    /** 밀린 행을 세는 간격. 지표는 1분마다 나가므로 그보다 짧으면 충분하다. 1초 주기마다 세면 DB 에 하루 8만 번 넘게 묻게 된다. */
+    static final Duration BACKLOG_EVERY = Duration.ofSeconds(15);
+
     /** 회차를 한 번 돌리고 그 결과를 돌려주는 함수. 운영에서는 {@link OutboxPublisher#publishBatch()} 다. */
     private final Supplier<Round> round;
 
+    /** 밀린 행을 세는 함수. 운영에서는 {@link OutboxRepository#backlog()} 다. */
+    private final Supplier<Backlog> backlog;
+
+    /** outbox 밀림 지표. 셀 때마다 값을 넘긴다. */
+    private final OutboxMetrics metrics;
+
     /** 지금 시각을 알려 주는 시계. 테스트가 시간을 손으로 앞당길 수 있게 건네받는다. */
     private final InstantSource clock;
+
+    /** 이 시각이 지나면 다음 회차가 끝날 때 밀린 행을 센다. 처음에는 곧바로 센다. */
+    private Instant nextBacklogAt = Instant.MIN;
 
     /** 지금 적용 중인 쉬는 시간. 0 이면 평소 상태다. 실패가 이어지면 {@link #nextBackoff(Duration)} 로 늘어난다. */
     private Duration backoff = Duration.ZERO;
@@ -91,20 +107,41 @@ class OutboxRelay {
      *
      * <p>{@code clock} 은 앱이 함께 쓰는 시계다. 이 저장소는 시각을 직접 읽지 않고 {@code Clock} 을 주입받는다. {@code Clock} 은
      * {@code InstantSource} 이기도 해서 그대로 넘긴다.
+     *
+     * <p>지표 객체는 relay 하나에 하나만 만든다. 만들 때 agent 의 meter 에 gauge 를 등록한다.
      */
     @Autowired
-    OutboxRelay(OutboxPublisher publisher, Clock clock) {
-        this(publisher::publishBatch, clock);
+    OutboxRelay(OutboxPublisher publisher, OutboxRepository repository, Clock clock) {
+        this(publisher::publishBatch, repository::backlog, OutboxMetrics.register(clock), clock);
     }
 
     /**
-     * 테스트가 쓰는 생성자. 회차와 시계를 바꿔 끼울 수 있어서 DB 와 Kafka 없이, 실제로 기다리지 않고 이 클래스의 판단만 확인할 수 있다.
+     * 테스트가 쓰는 생성자. 회차와 시계를 바꿔 끼울 수 있어서 DB 와 Kafka 없이, 실제로 기다리지 않고 이 클래스의 판단만 확인할 수 있다. 밀린 행은 늘 없다고
+     * 센다.
      *
      * @param round 회차를 한 번 돌리는 함수
      * @param clock 지금 시각을 알려 주는 시계
      */
     OutboxRelay(Supplier<Round> round, InstantSource clock) {
+        this(round, () -> Backlog.NONE, OutboxMetrics.register(clock), clock);
+    }
+
+    /**
+     * 지표까지 바꿔 끼우는 생성자. 운영 생성자와 위 테스트 생성자가 모두 이것을 부른다.
+     *
+     * @param round 회차를 한 번 돌리는 함수
+     * @param backlog 밀린 행을 세는 함수
+     * @param metrics 센 값을 받을 지표
+     * @param clock 지금 시각을 알려 주는 시계
+     */
+    OutboxRelay(
+            Supplier<Round> round,
+            Supplier<Backlog> backlog,
+            OutboxMetrics metrics,
+            InstantSource clock) {
         this.round = round;
+        this.backlog = backlog;
+        this.metrics = metrics;
         this.clock = clock;
     }
 
@@ -120,6 +157,8 @@ class OutboxRelay {
     @SkipEntryLog(
             "Polls every second. Logs start and end lines only in rounds that have rows to send")
     void run() {
+        // 스케줄러가 살아 있다는 표시. 쉬는 중이라 회차를 돌지 않아도 남긴다. 이 값이 오래되면 스케줄러가 멈춘 것이다
+        metrics.relayRan();
         // 회차 하나의 흐름(LogFlow.polling). 보낼 행이 있어 줄이 찍힌 회차에서만 시작·종료 줄(개수, 걸린 시간)이 남는다. 주기마다
         // 불리므로 빈 회차까지 남기면 하루 수만 줄이 "0건"으로 찬다. 종료 줄은 정상일 때의 흔적이기도 하다 — 이 줄이 없으면 "잘 보내는
         // 중"과 "relay 가 멈춤"을 로그로 가릴 수 없다. 예외는 LogFlow 가 받아 실패 줄로 남기고 밖으로 내보내지 않는다.
@@ -183,7 +222,33 @@ class OutboxRelay {
                             LogField.result("quarantined", quarantined),
                             LogField.result("failed", failed),
                             LogField.result("rounds", rounds));
+
+                    // 5. 때가 됐으면 밀린 행을 센다. 회차를 다 돈 뒤라 "보내고도 남은 것"이 잡힌다. 쉬는 동안(1번에서 돌아감)은 세지
+                    // 않는다 — 지표가 내보낼 때 마지막 값의 생성 시각으로 나이를 다시 재므로, Kafka 가 끊긴 동안에도 나이는 커진다
+                    measureBacklog();
                 });
+    }
+
+    /**
+     * {@link #BACKLOG_EVERY} 가 지났으면 밀린 행을 세어 지표에 넘긴다.
+     *
+     * <p>세다가 실패하면(DB 에 닿지 못함) 줄을 남기지 않고 넘어간다. 그때는 회차도 같은 이유로 실패해 실패 줄이 이미 남고, 지표는 마지막 값을 그대로 내보내
+     * 나이가 계속 커진다. 다음 간격에 다시 센다.
+     */
+    private void measureBacklog() {
+        Instant now = clock.instant();
+        if (now.isBefore(nextBacklogAt)) {
+            return;
+        }
+        nextBacklogAt = now.plus(BACKLOG_EVERY);
+        try {
+            Backlog measured = backlog.get();
+            metrics.backlog(
+                    measured.pending(),
+                    measured.oldest() == null ? null : measured.oldest().toInstant());
+        } catch (RuntimeException failure) {
+            // 위 설명대로 줄 없이 넘어간다. 실패는 회차의 실패 줄과 지표의 커지는 나이로 드러난다
+        }
     }
 
     /**

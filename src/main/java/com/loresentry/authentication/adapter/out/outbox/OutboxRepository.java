@@ -256,6 +256,32 @@ public class OutboxRepository {
     }
 
     /**
+     * 아직 보내지 않은 행의 수와 그중 가장 오래된 행의 생성 시각을 센다. relay 가 지표(outbox 밀림)로 내보내려고 15초마다 부른다.
+     *
+     * <p>{@link #lockPending(int)} 과 같은 조건이라 같은 부분 인덱스(ix_outbox_events_pending)만 읽는다. 평소에는 보낼 행이
+     * 거의 없어 몇 줄을 세는 것으로 끝난다. 행을 잠그지 않으므로 트랜잭션이 필요 없고, relay 의 회차 트랜잭션 밖에서 불린다.
+     *
+     * @return 보내지 않은 행의 수와 가장 오래된 생성 시각(행이 없으면 null)
+     */
+    @SkipEntryLog(
+            "Called every 15 seconds by the relay to measure the backlog. The relay logs only in rounds that send rows")
+    Backlog backlog() {
+        return jdbcClient
+                .sql(
+                        """
+                        select count(*) as pending, min(created_at) as oldest
+                        from outbox_events
+                        where published_at is null and quarantined_at is null
+                        """)
+                .query(
+                        (rows, index) ->
+                                new Backlog(
+                                        rows.getLong("pending"),
+                                        rows.getObject("oldest", OffsetDateTime.class)))
+                .single();
+    }
+
+    /**
      * 결과의 현재 행 하나를 {@link OutboxEvent} 로 옮긴다. 컬럼 이름은 {@link #lockPending(int)} 의 SELECT 와 맞아야 한다.
      */
     private static OutboxEvent mapRow(ResultSet rows) throws SQLException {
