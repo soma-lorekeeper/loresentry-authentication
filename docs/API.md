@@ -33,7 +33,7 @@ Auth가 Google을 호출하는 방법은 [호출 API](API_CALLS.md)에서 관리
 |---|---|---|---|
 | Google 로그인 준비 | `POST /oauth/google/prepare` | 빈 JSON 객체 | `200`, 준비 결과 |
 | Google 콜백 | `POST /oauth/google/callback` | 콜백 정보 | `200`, 로그인 완료 또는 동의 대기 |
-| 아이디 가입 | `POST /password/signup` | `login_id`, `password`, 선택 `display_name` | `200`, 로그인 완료 또는 동의 대기 |
+| 아이디 가입 | `POST /password/signup` | `login_id`, `password` | `200`, 로그인 완료 또는 동의 대기 |
 | 아이디 로그인 | `POST /password/login` | `login_id`, `password` | `200`, 로그인 완료 또는 동의 대기 |
 | 약관 조회 | `GET /terms` | `X-Consent-Request-Id`, 선택 `locale` 쿼리 | `200`, 약관 본문과 대기 만료 |
 | 동의 완료 | `POST /terms/accept` | `consent_request_id`, `terms_version_id` | `200`, 새 세션 정보 |
@@ -79,13 +79,12 @@ DB 커밋 후 실패는 [계정 유지 정책](login/LOGIN_FLOW.md#계정-생성
 Google 계정이 없는 사용자(평가·시연용 계정 포함)를 위한 로그인 수단이다. 계정 모델은 Google과 같다.
 아이디는 `oauth_identities`에 `provider = password`, `provider_id = login_id`로 연결하고,
 비밀번호 해시(bcrypt, cost 12)만 [`password_credentials`](account/AUTH_ERD.md#password_credentials--아이디-로그인-비밀번호)에 둔다.
-이메일은 받지 않으므로 본인 계정 응답의 `email`은 `null`이다.
+이메일과 이름은 받지 않는다. 본인 계정 응답의 `email`은 `null`이고, 표시 이름은 `login_id`로 시작해 온보딩에서 바꾼다.
 
 | 입력 | 규칙 |
 |---|---|
 | `login_id` | 앞뒤 공백 제거 후 소문자로 정규화. 영문 소문자·숫자로 시작하고 `[a-z0-9._-]` 3~32자 |
 | `password` | 공백 문자 없이 8자 이상, UTF-8 72바이트 이하. 원문은 저장·로그하지 않는다 |
-| `display_name` | 가입에만, 선택. 비어 있으면 `login_id`를 쓰고 [표시 이름 규칙](account/AUTH_ERD.md#2-계정-저장-규칙)으로 보정 |
 
 가입은 계정 커밋 뒤, 로그인은 해시 대조 뒤에 Google 콜백과 같은 동의 검사를 거친다.
 응답의 `status`는 `AUTHENTICATED`(`session_id`, `expires_at`) 또는 `TERMS_REQUIRED`(`consent_request_id`, `expires_at`)이며

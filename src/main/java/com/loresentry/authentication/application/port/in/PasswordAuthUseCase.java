@@ -9,7 +9,7 @@ public interface PasswordAuthUseCase {
 
     Result login(Login command);
 
-    record SignUp(String loginId, String password, String displayName) {
+    record SignUp(String loginId, String password) {
         @Override
         public String toString() {
             return "SignUp[redacted]";

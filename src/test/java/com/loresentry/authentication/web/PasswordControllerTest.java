@@ -30,7 +30,7 @@ class PasswordControllerTest {
 
     @Test
     void signUpReturnsOnlyTheSessionFieldsAndNoCookies() throws Exception {
-        when(passwords.signUp(new PasswordAuthUseCase.SignUp("judge1", "correct-horse-7", "심사")))
+        when(passwords.signUp(new PasswordAuthUseCase.SignUp("judge1", "correct-horse-7")))
                 .thenReturn(
                         PasswordAuthUseCase.Result.authenticated(
                                 new SessionId("A".repeat(43)), expiry));
@@ -38,7 +38,7 @@ class PasswordControllerTest {
                         post("/auth/password/signup")
                                 .contentType("application/json")
                                 .content(
-                                        "{\"login_id\":\"judge1\",\"password\":\"correct-horse-7\",\"display_name\":\"심사\"}"))
+                                        "{\"login_id\":\"judge1\",\"password\":\"correct-horse-7\"}"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.length()").value(3))
                 .andExpect(jsonPath("$.status").value("AUTHENTICATED"))
@@ -97,7 +97,7 @@ class PasswordControllerTest {
                 "{\"login_id\":\"judge1\"}",
                 "{\"password\":\"correct-horse-7\"}",
                 "{\"login_id\":1,\"password\":\"correct-horse-7\"}",
-                "{\"login_id\":\"judge1\",\"password\":\"correct-horse-7\",\"email\":\"x@y\"}"
+                "{\"login_id\":\"judge1\",\"password\":\"correct-horse-7\",\"display_name\":\"x\"}"
             })
     void malformedBodiesAreInvalidRequests(String body) throws Exception {
         mvc.perform(post("/auth/password/login").contentType("application/json").content(body))

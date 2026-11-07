@@ -57,8 +57,7 @@ class PasswordAuthServiceTest {
                         call -> new AccountStore.Account(call.getArgument(0), call.getArgument(1)));
         sessionWorks();
         var result =
-                service.signUp(
-                        new PasswordAuthUseCase.SignUp("  Writer.One ", "correct-horse-7", null));
+                service.signUp(new PasswordAuthUseCase.SignUp("  Writer.One ", "correct-horse-7"));
         assertThat(result.status()).isEqualTo(LoginUseCase.LoginStatus.AUTHENTICATED);
         assertThat(result.sessionId()).isEqualTo(sessionId);
         assertThat(result.expiresAt()).isEqualTo(expiry);
@@ -73,7 +72,7 @@ class PasswordAuthServiceTest {
     }
 
     @Test
-    void signUpKeepsAGivenDisplayNameAndReturnsTermsRequiredWhenTheGateAsks() {
+    void signUpNamesTheAccountAfterTheIdAndReturnsTermsRequiredWhenTheGateAsks() {
         when(userIds.generate()).thenReturn(userId);
         when(hasher.hash(any())).thenReturn("$hash");
         when(accounts.createWithPassword(any(), any(), any()))
@@ -83,15 +82,13 @@ class PasswordAuthServiceTest {
         when(terms.check(userId))
                 .thenReturn(
                         Optional.of(new TermsLoginGate.Required(consent, now.plusSeconds(1800))));
-        var result =
-                service.signUp(
-                        new PasswordAuthUseCase.SignUp("judge1", "correct-horse-7", " 심사위원 "));
+        var result = service.signUp(new PasswordAuthUseCase.SignUp("judge1", "correct-horse-7"));
         assertThat(result.status()).isEqualTo(LoginUseCase.LoginStatus.TERMS_REQUIRED);
         assertThat(result.consentRequestId()).isEqualTo(consent);
         assertThat(result.sessionId()).isNull();
         var user = org.mockito.ArgumentCaptor.forClass(User.class);
         verify(accounts).createWithPassword(user.capture(), any(), any());
-        assertThat(user.getValue().displayName()).isEqualTo("심사위원");
+        assertThat(user.getValue().displayName()).isEqualTo("judge1");
         verifyNoInteractions(sessions);
     }
 
@@ -109,8 +106,7 @@ class PasswordAuthServiceTest {
         assertThatThrownBy(
                         () ->
                                 service.signUp(
-                                        new PasswordAuthUseCase.SignUp(
-                                                loginId, "correct-horse-7", null)))
+                                        new PasswordAuthUseCase.SignUp(loginId, "correct-horse-7")))
                 .isInstanceOfSatisfying(
                         AuthFailure.class,
                         failure ->
@@ -122,10 +118,7 @@ class PasswordAuthServiceTest {
     @ParameterizedTest
     @ValueSource(strings = {"short", "has space12", "", "tab\there1"})
     void signUpRejectsPasswordsOutsideTheRule(String password) {
-        assertThatThrownBy(
-                        () ->
-                                service.signUp(
-                                        new PasswordAuthUseCase.SignUp("writer", password, null)))
+        assertThatThrownBy(() -> service.signUp(new PasswordAuthUseCase.SignUp("writer", password)))
                 .isInstanceOfSatisfying(
                         AuthFailure.class,
                         failure ->
@@ -134,8 +127,7 @@ class PasswordAuthServiceTest {
         assertThatThrownBy(
                         () ->
                                 service.signUp(
-                                        new PasswordAuthUseCase.SignUp(
-                                                "writer", "a".repeat(73), null)))
+                                        new PasswordAuthUseCase.SignUp("writer", "a".repeat(73))))
                 .isInstanceOfSatisfying(
                         AuthFailure.class,
                         failure ->
@@ -157,7 +149,7 @@ class PasswordAuthServiceTest {
                 .thenThrow(
                         new PortFailure(
                                 PortFailure.Kind.UNAVAILABLE, PortFailure.Execution.UNKNOWN, true));
-        var command = new PasswordAuthUseCase.SignUp("writer", "correct-horse-7", null);
+        var command = new PasswordAuthUseCase.SignUp("writer", "correct-horse-7");
         assertThatThrownBy(() -> service.signUp(command))
                 .isInstanceOfSatisfying(
                         AuthFailure.class,

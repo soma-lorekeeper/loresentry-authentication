@@ -27,14 +27,15 @@ public final class PasswordAuthService implements PasswordAuthUseCase {
         if (command == null) throw new AuthFailure(INVALID_REQUEST);
         var loginId = loginId(command.loginId());
         var password = password(command.password());
-        var name =
-                command.displayName() == null || command.displayName().isBlank()
-                        ? loginId
-                        : command.displayName();
         var now = clock.instant().truncatedTo(ChronoUnit.MICROS);
         var user =
                 new User(
-                        userIds.generate(), DisplayNames.initial(name, null), now, now, null, null);
+                        userIds.generate(),
+                        DisplayNames.initial(loginId, null),
+                        now,
+                        now,
+                        null,
+                        null);
         try {
             var account =
                     accounts.createWithPassword(
