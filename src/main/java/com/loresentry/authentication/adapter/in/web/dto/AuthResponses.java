@@ -33,6 +33,18 @@ public final class AuthResponses {
         }
     }
 
+    @JsonInclude(JsonInclude.Include.NON_NULL)
+    public record PasswordLogin(
+            String status,
+            @JsonProperty("session_id") String sessionId,
+            @JsonProperty("consent_request_id") String consentRequestId,
+            @JsonProperty("expires_at") Instant expiresAt) {
+        @Override
+        public String toString() {
+            return "PasswordLogin[REDACTED]";
+        }
+    }
+
     @JsonInclude(JsonInclude.Include.ALWAYS)
     public record Profile(
             UUID id,

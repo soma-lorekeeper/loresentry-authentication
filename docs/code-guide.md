@@ -41,6 +41,17 @@
 `OAuthRequests.consume()`는 입력 검사, 저장된 요청 조회·검증, 소비, 소비한 값의 재검증을
 순서대로 수행한다. 오류에 붙는 소비 상태는 재시도 판단에 영향을 주므로 이 경계를 유지한다.
 
+## 아이디·비밀번호 가입과 로그인
+
+- [PasswordController](../src/main/java/com/loresentry/authentication/adapter/in/web/PasswordController.java)가
+  `POST /auth/password/signup`·`/login`을 `PasswordAuthUseCase`에 전달한다.
+- [PasswordAuthService](../src/main/java/com/loresentry/authentication/application/service/PasswordAuthService.java)는
+  `PasswordAccount`로 아이디·비밀번호 규칙을 검사하고, 가입은 `AccountStore.createWithPassword()`, 로그인은
+  `findByIdentity("password", id)`와 `passwordHash()`로 해시를 대조한다. 그 뒤는 Google 콜백과 같이
+  `TermsLoginGate.check()` → `SessionIssuance.create()`다.
+- 해시는 `PasswordHasher` 포트 뒤의 [BcryptPasswordHasher](../src/main/java/com/loresentry/authentication/adapter/out/password/BcryptPasswordHasher.java)가 맡는다.
+- `AccountTransactions.createWithPassword()`가 사용자·신원·해시를 한 트랜잭션에 넣고, 아이디 충돌은 기존 신원 PK 충돌 규칙을 그대로 쓴다.
+
 ## 약관 조회와 완료
 
 - [TermsController](../src/main/java/com/loresentry/authentication/adapter/in/web/TermsController.java)는 조회·동의 요청을 서비스에 전달한다.

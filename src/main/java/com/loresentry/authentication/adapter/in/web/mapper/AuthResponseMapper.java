@@ -4,6 +4,7 @@ import com.loresentry.authentication.adapter.in.web.dto.AuthResponses;
 import com.loresentry.authentication.application.port.in.AccountUseCase;
 import com.loresentry.authentication.application.port.in.AuthFailure.Consumption;
 import com.loresentry.authentication.application.port.in.LoginUseCase;
+import com.loresentry.authentication.application.port.in.PasswordAuthUseCase;
 import com.loresentry.authentication.domain.SupportedLocale;
 import org.mapstruct.Mapper;
 import org.mapstruct.Mapping;
@@ -26,6 +27,10 @@ public interface AuthResponseMapper {
             source = "consumption",
             qualifiedByName = "consumptionFlag")
     AuthResponses.Callback callback(LoginUseCase.LoginResult login);
+
+    @Mapping(target = "sessionId", source = "sessionId.value")
+    @Mapping(target = "consentRequestId", source = "consentRequestId.value")
+    AuthResponses.PasswordLogin passwordLogin(PasswordAuthUseCase.Result result);
 
     default String localeCode(SupportedLocale locale) {
         return locale == null ? null : locale.code();

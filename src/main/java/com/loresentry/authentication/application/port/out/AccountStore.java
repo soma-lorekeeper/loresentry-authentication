@@ -45,6 +45,10 @@ public interface AccountStore {
      */
     Account create(User user, OAuthIdentity identity);
 
+    Account createWithPassword(User user, OAuthIdentity identity, String passwordHash);
+
+    Optional<String> passwordHash(UUID userId);
+
     /**
      * 외부 신원의 이메일과 사용자의 수정 시각을 변경한다.
      *
