@@ -6,7 +6,7 @@
 
 Authentication service for Lore Sentry.
 
-Handles the Google-based sign-in flow, user account and display name data, and
+Handles the Google and login-id/password sign-in flows, user account and display name data, and
 authentication session logic used by the Gateway/BFF.
 
 See the [provided API](docs/API.md) and [outbound API calls](docs/API_CALLS.md) for the two API roles.

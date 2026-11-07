@@ -33,6 +33,8 @@ Auth가 Google을 호출하는 방법은 [호출 API](API_CALLS.md)에서 관리
 |---|---|---|---|
 | Google 로그인 준비 | `POST /oauth/google/prepare` | 빈 JSON 객체 | `200`, 준비 결과 |
 | Google 콜백 | `POST /oauth/google/callback` | 콜백 정보 | `200`, 로그인 완료 또는 동의 대기 |
+| 아이디 가입 | `POST /password/signup` | `login_id`, `password`, 선택 `display_name` | `200`, 로그인 완료 또는 동의 대기 |
+| 아이디 로그인 | `POST /password/login` | `login_id`, `password` | `200`, 로그인 완료 또는 동의 대기 |
 | 약관 조회 | `GET /terms` | `X-Consent-Request-Id`, 선택 `locale` 쿼리 | `200`, 약관 본문과 대기 만료 |
 | 동의 완료 | `POST /terms/accept` | `consent_request_id`, `terms_version_id` | `200`, 새 세션 정보 |
 | 세션 폐기 | `POST /sessions/revoke` | `session_id` | `204`, 본문 없음 |
@@ -71,6 +73,31 @@ Google 콜백 URI는 서버 설정을 사용하며 호출자가 지정하지 않
 결과 불명 `null`이다. 다른 API에는 포함하지 않는다. BFF는 이를
 [임시 쿠키 정리](../../loresentry-gateway/docs/auth/LOGIN_FLOW.md#oauth-임시-쿠키)에 사용한다.
 DB 커밋 후 실패는 [계정 유지 정책](login/LOGIN_FLOW.md#계정-생성-후-세션-저장-실패)을 따른다.
+
+## 아이디·비밀번호 가입과 로그인
+
+Google 계정이 없는 사용자(평가·시연용 계정 포함)를 위한 로그인 수단이다. 계정 모델은 Google과 같다.
+아이디는 `oauth_identities`에 `provider = password`, `provider_id = login_id`로 연결하고,
+비밀번호 해시(bcrypt, cost 12)만 [`password_credentials`](account/AUTH_ERD.md#password_credentials--아이디-로그인-비밀번호)에 둔다.
+이메일은 받지 않으므로 본인 계정 응답의 `email`은 `null`이다.
+
+| 입력 | 규칙 |
+|---|---|
+| `login_id` | 앞뒤 공백 제거 후 소문자로 정규화. 영문 소문자·숫자로 시작하고 `[a-z0-9._-]` 3~32자 |
+| `password` | 공백 문자 없이 8자 이상, UTF-8 72바이트 이하. 원문은 저장·로그하지 않는다 |
+| `display_name` | 가입에만, 선택. 비어 있으면 `login_id`를 쓰고 [표시 이름 규칙](account/AUTH_ERD.md#2-계정-저장-규칙)으로 보정 |
+
+가입은 계정 커밋 뒤, 로그인은 해시 대조 뒤에 Google 콜백과 같은 동의 검사를 거친다.
+응답의 `status`는 `AUTHENTICATED`(`session_id`, `expires_at`) 또는 `TERMS_REQUIRED`(`consent_request_id`, `expires_at`)이며
+`login_request_consumed`는 포함하지 않는다. 세션 발급과 단일 로그인 규칙은 Google 로그인과 같다.
+
+| HTTP | code | 조건 |
+|---|---|---|
+| 400 | `INVALID_LOGIN_ID` | 가입 아이디가 규칙을 벗어남 |
+| 400 | `INVALID_PASSWORD` | 가입 비밀번호가 규칙을 벗어남 |
+| 409 | `LOGIN_ID_TAKEN` | 같은 아이디가 이미 있음. 동시 가입도 PK 충돌로 같은 결과 |
+| 401 | `INVALID_CREDENTIALS` | 로그인 아이디 없음·비밀번호 불일치·형식 오류. 어느 쪽인지 구분하지 않음 |
+| 503 | `LOGIN_UNAVAILABLE` | DB·Redis 실패, 적용 약관 없음, 세션 생성 결과 불명 |
 
 ## 약관 조회와 동의 완료
 
@@ -226,6 +253,10 @@ next_action은 안내이며 세션 상태 변경이나 명령 실행 여부의 �
 |---|---|---|---|
 | 400 | `INVALID_REQUEST` | JSON·필수 입력·헤더·수정 필드·계정 언어 값·지원하지 않는 메서드 오류 | `NONE` |
 | 400 | `INVALID_DISPLAY_NAME` | 표시 이름 검증 실패 | `NONE` |
+| 400 | `INVALID_LOGIN_ID` | 가입 아이디 검증 실패 | `NONE` |
+| 400 | `INVALID_PASSWORD` | 가입 비밀번호 검증 실패 | `NONE` |
+| 409 | `LOGIN_ID_TAKEN` | 이미 사용 중인 아이디 | `NONE` |
+| 401 | `INVALID_CREDENTIALS` | 아이디 로그인의 아이디·비밀번호 불일치 | `NONE` |
 | 400 | `INVALID_SESSION_ID` | 폐기 ID 누락·형식 오류 | `NONE` |
 | 400 | `OAUTH_REQUEST_INVALID` | 임시 상태·브라우저 연결·state 검증 실패 | `RESTART_LOGIN` |
 | 400 | `OAUTH_LOGIN_DENIED` | Google 로그인 취소·거절 | `RESTART_LOGIN` |

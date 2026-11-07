@@ -33,6 +33,14 @@ public class JpaAccountStore implements AccountStore {
         return invoke(() -> transactions.create(user, identity));
     }
 
+    public Account createWithPassword(User user, OAuthIdentity identity, String passwordHash) {
+        return invoke(() -> transactions.createWithPassword(user, identity, passwordHash));
+    }
+
+    public Optional<String> passwordHash(UUID userId) {
+        return invoke(() -> transactions.passwordHash(userId));
+    }
+
     public Account updateEmail(String provider, String subject, String email, Instant time) {
         return invoke(() -> transactions.updateEmail(provider, subject, email, time));
     }

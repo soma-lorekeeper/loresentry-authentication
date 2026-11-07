@@ -2,6 +2,7 @@ package com.loresentry.authentication.adapter.in.web.mapper;
 
 import com.loresentry.authentication.adapter.in.web.dto.AuthRequests;
 import com.loresentry.authentication.application.port.in.LoginUseCase;
+import com.loresentry.authentication.application.port.in.PasswordAuthUseCase;
 import org.mapstruct.Mapper;
 import org.mapstruct.MappingConstants;
 import org.mapstruct.ReportingPolicy;
@@ -11,4 +12,8 @@ import org.mapstruct.ReportingPolicy;
         unmappedTargetPolicy = ReportingPolicy.ERROR)
 public interface AuthRequestMapper {
     LoginUseCase.Callback callback(AuthRequests.Callback request);
+
+    PasswordAuthUseCase.SignUp signUp(AuthRequests.SignUp request);
+
+    PasswordAuthUseCase.Login passwordLogin(AuthRequests.PasswordLogin request);
 }

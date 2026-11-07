@@ -75,8 +75,8 @@ ERD의 `0..N`은 DB에서 허용하는 관계이며, 계정 연결 기능 제공
 
 | 컬럼 | 타입 | 제약·용도 |
 |---|---|---|
-| `provider` | `varchar(32)` | 복합 PK 구성. 초기 값은 `google` |
-| `provider_id` | `varchar(255)` | 복합 PK 구성. 제공자가 부여한 계정 식별자. Google은 검증된 `sub` |
+| `provider` | `varchar(32)` | 복합 PK 구성. `google` 또는 아이디 로그인의 `password` |
+| `provider_id` | `varchar(255)` | 복합 PK 구성. 제공자가 부여한 계정 식별자. Google은 검증된 `sub`, `password`는 소문자로 정규화한 아이디 |
 | `user_id` | `uuid` | NOT NULL, FK → `users.id` |
 | `email` | `varchar(320)` | 제공자에게 받은 이메일. NULL 허용, UNIQUE 없음 |
 
@@ -102,6 +102,17 @@ ERD의 `0..N`은 DB에서 허용하는 관계이며, 계정 연결 기능 제공
 행이 없으면 이 기능 이전에 가입한 계정이거나 프론트가 보내지 못한 경우다. 행이 있고 출처 컬럼이 모두 NULL이면 직접 방문이다.
 "광고·검색·직접" 같은 채널 구분은 저장하지 않고 조회할 때 `click_id`, `utm_medium`, `referrer_host`로 계산한다.
 
+### `password_credentials` — 아이디 로그인 비밀번호
+
+| 컬럼 | 타입 | 제약·용도 |
+|---|---|---|
+| `user_id` | `uuid` | PK, FK → `users.id` `ON DELETE CASCADE`. 계정당 한 행 |
+| `password_hash` | `varchar(255)` | NOT NULL. bcrypt(cost 12) 해시. 원문은 저장하지 않는다 |
+| `created_at` | `timestamptz` | NOT NULL. 가입 시각 |
+
+아이디 자체는 `oauth_identities(provider = 'password', provider_id)`에 있어 Google 계정과 같은 조회·세션·탈퇴 경로를 탄다.
+이 표는 해시만 더한다. 비밀번호 변경·재설정 API는 두지 않는다.
+
 ## 2. 계정 저장 규칙
 
 - 로그인 시 `(provider, provider_id)`로 조회한다. 기존 정보가 있으면 연결된 `user_id`를 사용한다.
@@ -110,6 +121,8 @@ ERD의 `0..N`은 DB에서 허용하는 관계이며, 계정 연결 기능 제공
   동시 가입 충돌은 [동시 가입 충돌 규칙](#동시-가입-충돌)을 따른다.
   DB 커밋 이후의 세션 저장 실패는 [로그인 실패 처리](../login/LOGIN_FLOW.md#계정-생성-후-세션-저장-실패)를 따른다.
 - 제공자나 외부 계정 식별자가 다르면 새 사용자를 만든다. 이메일이 같아도 자동 연결하지 않는다.
+- 아이디 가입은 `users`·`oauth_identities(password)`·`password_credentials`를 한 트랜잭션으로 만든다.
+  아이디는 소문자로 정규화해 저장하므로 대소문자만 다른 아이디는 같은 계정이다. 이메일은 NULL이다.
 - `provider_id`는 대소문자를 포함해 제공자의 원문을 보존한다.
   외부 계정 식별자와 이메일은 저장 전 길이를 검증하고, 제한을 초과하면 잘라 저장하지 않고 오류로 처리한다.
 - 재로그인 시 인증된 제공자 응답에 이메일이 있으면 해당 `oauth_identities.email`을 최신 값으로 갱신한다.

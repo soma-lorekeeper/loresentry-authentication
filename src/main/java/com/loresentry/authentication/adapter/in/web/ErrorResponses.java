@@ -19,6 +19,11 @@ public final class ErrorResponses {
                     new Contract(401, "Consent request is invalid or expired.", "RESTART_LOGIN");
             case TERMS_VERSION_MISMATCH -> new Contract(409, "Terms version has changed.", "NONE");
             case INVALID_DISPLAY_NAME -> new Contract(400, "Invalid display name.", "NONE");
+            case INVALID_LOGIN_ID -> new Contract(400, "Invalid login id.", "NONE");
+            case INVALID_PASSWORD -> new Contract(400, "Invalid password.", "NONE");
+            case LOGIN_ID_TAKEN -> new Contract(409, "Login id is already taken.", "NONE");
+            case INVALID_CREDENTIALS ->
+                    new Contract(401, "Login id or password is incorrect.", "NONE");
             case OAUTH_REQUEST_INVALID ->
                     new Contract(400, "Login request is invalid or expired.", "RESTART_LOGIN");
             case OAUTH_LOGIN_DENIED -> new Contract(400, "Login was denied.", "RESTART_LOGIN");

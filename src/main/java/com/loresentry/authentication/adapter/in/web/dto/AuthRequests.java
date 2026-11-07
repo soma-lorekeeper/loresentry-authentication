@@ -33,6 +33,24 @@ public final class AuthRequests {
         }
     }
 
+    public record SignUp(
+            @JsonProperty("login_id") @NotNull String loginId,
+            @NotNull String password,
+            @JsonProperty("display_name") String displayName) {
+        @Override
+        public String toString() {
+            return "SignUp[REDACTED]";
+        }
+    }
+
+    public record PasswordLogin(
+            @JsonProperty("login_id") @NotNull String loginId, @NotNull String password) {
+        @Override
+        public String toString() {
+            return "PasswordLogin[REDACTED]";
+        }
+    }
+
     public record Session(@JsonProperty("session_id") String sessionId) {
         @Override
         public String toString() {

@@ -70,6 +70,28 @@ public class AccountTransactions {
     }
 
     @Transactional(rollbackFor = Exception.class, isolation = Isolation.READ_COMMITTED)
+    public Account createWithPassword(User user, OAuthIdentity identity, String passwordHash) {
+        var account = create(user, identity);
+        jdbc.update(
+                "INSERT INTO password_credentials(user_id, password_hash, created_at) VALUES (?, ?, ?)",
+                user.id(),
+                passwordHash,
+                Timestamp.from(user.createdAt()));
+        return account;
+    }
+
+    @Transactional(readOnly = true)
+    public Optional<String> passwordHash(UUID userId) {
+        return jdbc
+                .queryForList(
+                        "SELECT password_hash FROM password_credentials WHERE user_id = ?",
+                        String.class,
+                        userId)
+                .stream()
+                .findFirst();
+    }
+
+    @Transactional(rollbackFor = Exception.class, isolation = Isolation.READ_COMMITTED)
     public Account updateEmail(String provider, String subject, String email, Instant time) {
         var identity = identities.findById(new OAuthIdentityId(provider, subject)).orElseThrow();
         identity.updateEmail(email);
